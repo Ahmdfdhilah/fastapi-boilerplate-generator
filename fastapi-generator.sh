@@ -97,6 +97,7 @@ load_custom_config() {
     fi
 }
 
+
 # Interactive mode for gathering project details
 interactive_setup() {
     echo -e "${BLUE}=== FastAPI JWT Boilerplate Generator ===${NC}"
@@ -106,6 +107,22 @@ interactive_setup() {
     PROJECT_DESCRIPTION=$(prompt_with_default "Enter project description" "${PROJECT_DESCRIPTION:-FastAPI service with JWT authentication}")
     AUTHOR_NAME=$(prompt_with_default "Enter author name" "${AUTHOR_NAME:-$(git config user.name 2>/dev/null || echo 'Your Name')}")
     AUTHOR_EMAIL=$(prompt_with_default "Enter author email" "${AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo 'your.email@example.com')}")
+
+    # Prompt user for the parent directory
+    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (e.g., /home/user/projects, or leave blank for current directory): ${NC}")" PARENT_DIR_INPUT
+    
+    # Resolve the absolute path of the parent directory
+    if [[ -z "$PARENT_DIR_INPUT" ]]; then
+        PROJECT_PARENT_DIR="$(pwd)" # Current directory
+    else
+        PROJECT_PARENT_DIR="$(cd "$PARENT_DIR_INPUT" && pwd)"
+        if [[ $? -ne 0 ]]; then
+            print_error "Invalid directory: $PARENT_DIR_INPUT. Using current directory instead."
+            PROJECT_PARENT_DIR="$(pwd)"
+        fi
+    fi
+    echo -e "${YELLOW}Project will be created in: $PROJECT_PARENT_DIR/${PROJECT_NAME}${NC}"
+    # --- END NEW ADDITION ---
 
     # Ask for deployment preference if not set
     if [[ -z "$USE_DOCKER" ]]; then
@@ -148,20 +165,23 @@ validate_config() {
 
 # Create project structure
 create_project_structure() {
-    # Sanitize project name for directory
-    PROJECT_DIR=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+   # Sanitize project name for directory
+    PROJECT_DIR_NAME=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+    
+    # Combine parent directory and project name to get the full path
+    PROJECT_FULL_PATH="$PROJECT_PARENT_DIR/$PROJECT_DIR_NAME"
 
-    print_status "Creating project directory: $PROJECT_DIR"
+    print_status "Creating project directory: $PROJECT_FULL_PATH"
 
     # Check if directory already exists
-    if [[ -d "$PROJECT_DIR" ]]; then
-        print_error "Directory $PROJECT_DIR already exists!"
+    if [[ -d "$PROJECT_FULL_PATH" ]]; then
+        print_error "Directory $PROJECT_FULL_PATH already exists!"
         exit 1
     fi
 
     # Create project structure
-    mkdir -p "$PROJECT_DIR"
-    cd "$PROJECT_DIR"
+    mkdir -p "$PROJECT_FULL_PATH"
+    cd "$PROJECT_FULL_PATH"
 
     print_status "Creating project structure..."
 
@@ -287,7 +307,7 @@ main() {
     # Load custom configuration if provided
     load_custom_config
     
-    # If no arguments provided, run interactive mode
+    # If no arguments provided or project name is not set, run interactive mode
     if [[ $# -eq 0 || -z "$PROJECT_NAME" ]]; then
         interactive_setup
     fi
