@@ -97,7 +97,6 @@ load_custom_config() {
     fi
 }
 
-
 # Interactive mode for gathering project details
 interactive_setup() {
     echo -e "${BLUE}=== FastAPI JWT Boilerplate Generator ===${NC}"
@@ -109,20 +108,38 @@ interactive_setup() {
     AUTHOR_EMAIL=$(prompt_with_default "Enter author email" "${AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo 'your.email@example.com')}")
 
     # Prompt user for the parent directory
-    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (e.g., /home/user/projects, or leave blank for current directory): ${NC}")" PARENT_DIR_INPUT
+    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (e.g., /home/user/projects, or leave blank to use parent directory): ${NC}")" PARENT_DIR_INPUT
     
     # Resolve the absolute path of the parent directory
     if [[ -z "$PARENT_DIR_INPUT" ]]; then
-        PROJECT_PARENT_DIR="$(pwd)" # Current directory
-    else
-        PROJECT_PARENT_DIR="$(cd "$PARENT_DIR_INPUT" && pwd)"
-        if [[ $? -ne 0 ]]; then
-            print_error "Invalid directory: $PARENT_DIR_INPUT. Using current directory instead."
+        # If empty, go one level up from script directory
+        SCRIPT_PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+        if [[ -d "$SCRIPT_PARENT_DIR" && -w "$SCRIPT_PARENT_DIR" ]]; then
+            PROJECT_PARENT_DIR="$(cd "$SCRIPT_PARENT_DIR" && pwd)"
+            print_status "Using parent directory (one level up from script location)"
+        else
+            print_warning "Cannot access parent directory, using current working directory instead"
             PROJECT_PARENT_DIR="$(pwd)"
+        fi
+    else
+        # Expand tilde and resolve absolute path
+        PARENT_DIR_INPUT="${PARENT_DIR_INPUT/#\~/$HOME}"
+        
+        if [[ -d "$PARENT_DIR_INPUT" && -w "$PARENT_DIR_INPUT" ]]; then
+            PROJECT_PARENT_DIR="$(cd "$PARENT_DIR_INPUT" && pwd)"
+        else
+            print_error "Invalid or inaccessible directory: $PARENT_DIR_INPUT"
+            SCRIPT_PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+            if [[ -d "$SCRIPT_PARENT_DIR" && -w "$SCRIPT_PARENT_DIR" ]]; then
+                PROJECT_PARENT_DIR="$(cd "$SCRIPT_PARENT_DIR" && pwd)"
+                print_status "Using parent directory instead"
+            else
+                PROJECT_PARENT_DIR="$(pwd)"
+                print_warning "Using current working directory instead"
+            fi
         fi
     fi
     echo -e "${YELLOW}Project will be created in: $PROJECT_PARENT_DIR/${PROJECT_NAME}${NC}"
-    # --- END NEW ADDITION ---
 
     # Ask for deployment preference if not set
     if [[ -z "$USE_DOCKER" ]]; then
