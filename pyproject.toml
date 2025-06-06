@@ -1,0 +1,166 @@
+# pyproject.toml - Modern Python packaging standard
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastapi-boilerplate-generator"
+version = "1.0.0"
+description = "A modular FastAPI boilerplate generator with JWT authentication"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Ahmad Fadillah", email = "fadillahbringin@gmail.com"}
+]
+maintainers = [
+    {name = "Ahmad Fadillah", email = "fadillahbringin@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+    "Framework :: FastAPI",
+]
+keywords = ["fastapi", "generator", "boilerplate", "jwt", "authentication", "api"]
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0.0",
+    "jinja2>=3.0.0",
+    "pyyaml>=6.0",
+    "requests>=2.25.0",
+    "rich>=12.0.0",  # For beautiful terminal output
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=3.0",
+    "black>=21.0",
+    "flake8>=3.8",
+    "mypy>=0.900",
+    "pre-commit>=2.15.0",
+]
+test = [
+    "pytest>=6.0",
+    "pytest-cov>=3.0",
+    "pytest-mock>=3.6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ahmdfdhilah/fastapi-boilerplate-generator"
+Repository = "https://github.com/ahmdfdhilah/fastapi-boilerplate-generator"
+Documentation = "https://github.com/ahmdfdhilah/fastapi-boilerplate-generator#readme"
+Changelog = "https://github.com/ahmdfdhilah/fastapi-boilerplate-generator/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ahmdfdhilah/fastapi-boilerplate-generator/issues"
+
+[project.scripts]
+fastapi-generator = "fastapi_generator.cli:main"
+fastapi-gen = "fastapi_generator.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+include = ["fastapi_generator*"]
+
+[tool.setuptools.package-data]
+fastapi_generator = [
+    "templates/**/*",
+    "configs/**/*",
+    "examples/**/*",
+]
+
+# Black code formatter
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+# isort import sorter
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+# MyPy type checking
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["fastapi_generator"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
