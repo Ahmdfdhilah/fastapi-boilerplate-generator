@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# API endpoint generators
+# API endpoint generators - Fixed with Step 1: Password Security
 
-# Generate user schemas
+# Generate user schemas with password validation
 generate_user_schemas() {
     cat > src/schemas/user.py << 'EOF'
-"""User schemas."""
+"""User schemas with password security validation."""
 
 from typing import List, Optional
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
+from datetime import datetime
 
 
 class UserBase(BaseModel):
@@ -20,8 +21,19 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    """Schema for creating a user."""
+    """Schema for creating a user with password validation."""
     password: str
+    
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, password: str) -> str:
+        from src.utils.validators import validate_password_strength
+        
+        result = validate_password_strength(password)
+        if not result["valid"]:
+            raise ValueError(f"Password validation failed: {', '.join(result['errors'])}")
+        
+        return password
 
 
 class UserUpdate(BaseModel):
@@ -34,6 +46,10 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     """Schema for user response."""
     id: int
+    is_verified: bool
+    password_changed_at: Optional[datetime] = None
+    force_password_change: bool
+    last_login: Optional[datetime] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +58,58 @@ class UserLogin(BaseModel):
     """Schema for user login."""
     email: EmailStr
     password: str
+
+
+class PasswordChange(BaseModel):
+    """Schema for password change."""
+    current_password: str
+    new_password: str
+    
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, password: str) -> str:
+        from src.utils.validators import validate_password_strength
+        
+        result = validate_password_strength(password)
+        if not result["valid"]:
+            raise ValueError(f"Password validation failed: {', '.join(result['errors'])}")
+        
+        return password
+
+
+class PasswordReset(BaseModel):
+    """Schema for password reset request."""
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    """Schema for password reset confirmation."""
+    token: str
+    new_password: str
+    
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, password: str) -> str:
+        from src.utils.validators import validate_password_strength
+        
+        result = validate_password_strength(password)
+        if not result["valid"]:
+            raise ValueError(f"Password validation failed: {', '.join(result['errors'])}")
+        
+        return password
+
+
+class PasswordStrengthCheck(BaseModel):
+    """Schema for password strength checking."""
+    password: str
+
+
+class PasswordStrengthResponse(BaseModel):
+    """Schema for password strength response."""
+    valid: bool
+    strength_score: int
+    errors: List[str]
+    feedback: List[str]
 
 
 class Token(BaseModel):
@@ -74,42 +142,32 @@ class StatusMessage(BaseModel):
 class ErrorResponse(BaseModel):
     """Standard error response."""
     detail: str
-EOF
 
-    # Create schemas __init__.py
-    cat > src/schemas/__init__.py << 'EOF'
-"""Schemas package."""
 
-from .user import UserCreate, UserResponse, UserLogin, Token
-from .common import StatusMessage, ErrorResponse
-
-__all__ = [
-    "UserCreate",
-    "UserResponse", 
-    "UserLogin",
-    "Token",
-    "StatusMessage",
-    "ErrorResponse"
-]
+class SuccessResponse(BaseModel):
+    """Standard success response."""
+    success: bool
+    message: str
+    data: dict = None
 EOF
 }
 
-# Generate user repository
+# Generate user repository with password security
 generate_user_repository() {
     cat > src/repositories/user.py << 'EOF'
-"""User repository."""
+"""User repository with password security features."""
 
 from typing import List, Optional
-from sqlalchemy import select, and_
+from datetime import datetime, timedelta
+from sqlalchemy import select, and_, update
 from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.user import User, Role, UserRole
+from src.models.user import User, Role, UserRole, PasswordResetToken
 from src.schemas.user import UserCreate, UserUpdate
 
 
 class UserRepository:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session):
         self.session = session
 
     async def get_by_id(self, user_id: int) -> Optional[User]:
@@ -136,6 +194,8 @@ class UserRepository:
             first_name=user_data.first_name,
             last_name=user_data.last_name,
             is_active=user_data.is_active,
+            password_changed_at=datetime.utcnow(),
+            password_history=[hashed_password]
         )
         self.session.add(user)
         await self.session.commit()
@@ -152,9 +212,70 @@ class UserRepository:
         for key, value in update_data.items():
             setattr(user, key, value)
 
+        user.updated_at = datetime.utcnow()
         await self.session.commit()
         await self.session.refresh(user)
         return user
+
+    async def update_password(self, user_id: int, new_hashed_password: str) -> Optional[User]:
+        """Update user password with history tracking."""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return None
+
+        # Add current password to history
+        user.add_password_to_history(user.hashed_password)
+        
+        # Update password
+        user.hashed_password = new_hashed_password
+        user.password_changed_at = datetime.utcnow()
+        user.force_password_change = False
+        user.updated_at = datetime.utcnow()
+
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def increment_failed_login_attempts(self, user_id: int) -> None:
+        """Increment failed login attempts counter."""
+        query = (
+            update(User)
+            .where(User.id == user_id)
+            .values(
+                failed_login_attempts=User.failed_login_attempts + 1,
+                updated_at=datetime.utcnow()
+            )
+        )
+        await self.session.execute(query)
+        await self.session.commit()
+
+    async def reset_failed_login_attempts(self, user_id: int) -> None:
+        """Reset failed login attempts counter."""
+        query = (
+            update(User)
+            .where(User.id == user_id)
+            .values(
+                failed_login_attempts=0,
+                last_login=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+        )
+        await self.session.execute(query)
+        await self.session.commit()
+
+    async def lock_account(self, user_id: int, lock_duration_minutes: int = 15) -> None:
+        """Lock user account for specified duration."""
+        lock_until = datetime.utcnow() + timedelta(minutes=lock_duration_minutes)
+        query = (
+            update(User)
+            .where(User.id == user_id)
+            .values(
+                locked_until=lock_until,
+                updated_at=datetime.utcnow()
+            )
+        )
+        await self.session.execute(query)
+        await self.session.commit()
 
     async def get_user_roles(self, user_id: int) -> List[Role]:
         """Get user roles."""
@@ -173,29 +294,51 @@ class UserRepository:
         await self.session.commit()
         await self.session.refresh(user_role)
         return user_role
-EOF
 
-    # Create repositories __init__.py
-    cat > src/repositories/__init__.py << 'EOF'
-"""Repositories package."""
+    async def create_password_reset_token(self, user_id: int, token: str, expires_at: datetime) -> PasswordResetToken:
+        """Create password reset token."""
+        reset_token = PasswordResetToken(
+            user_id=user_id,
+            token=token,
+            expires_at=expires_at
+        )
+        self.session.add(reset_token)
+        await self.session.commit()
+        await self.session.refresh(reset_token)
+        return reset_token
 
-from .user import UserRepository
+    async def get_password_reset_token(self, token: str) -> Optional[PasswordResetToken]:
+        """Get password reset token."""
+        query = select(PasswordResetToken).where(PasswordResetToken.token == token)
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
 
-__all__ = ["UserRepository"]
+    async def use_password_reset_token(self, token: str) -> bool:
+        """Mark password reset token as used."""
+        query = (
+            update(PasswordResetToken)
+            .where(PasswordResetToken.token == token)
+            .values(used=True, updated_at=datetime.utcnow())
+        )
+        result = await self.session.execute(query)
+        await self.session.commit()
+        return result.rowcount > 0
 EOF
 }
 
-# Generate user service
+# Generate user service with password security
 generate_user_service() {
     cat > src/services/user.py << 'EOF'
-"""User service."""
+"""User service with password security features."""
 
 from typing import Optional
+from datetime import datetime
 from fastapi import HTTPException, status
 
 from src.repositories.user import UserRepository
-from src.schemas.user import UserCreate, UserUpdate, UserResponse
+from src.schemas.user import UserCreate, UserUpdate, UserResponse, PasswordChange
 from src.auth.jwt import get_password_hash, verify_password
+from src.utils.validators import validate_password_history, validate_password_strength
 
 
 class UserService:
@@ -203,7 +346,7 @@ class UserService:
         self.user_repo = user_repo
 
     async def create_user(self, user_data: UserCreate) -> UserResponse:
-        """Create a new user."""
+        """Create a new user with password validation."""
         # Check if user exists
         existing_user = await self.user_repo.get_by_email(user_data.email)
         if existing_user:
@@ -221,13 +364,35 @@ class UserService:
         return UserResponse.model_validate(user)
 
     async def authenticate_user(self, email: str, password: str) -> Optional[UserResponse]:
-        """Authenticate user."""
+        """Authenticate user with account lockout protection."""
         user = await self.user_repo.get_by_email(email)
         if not user:
             return None
         
+        # Check if account is locked
+        if user.is_locked():
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail="Account is temporarily locked due to too many failed login attempts"
+            )
+        
+        # Verify password
         if not verify_password(password, user.hashed_password):
+            # Increment failed attempts
+            await self.user_repo.increment_failed_login_attempts(user.id)
+            
+            # Check if we should lock the account (5 failed attempts)
+            if user.failed_login_attempts + 1 >= 5:
+                await self.user_repo.lock_account(user.id, 15)  # Lock for 15 minutes
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail="Account locked due to too many failed login attempts. Try again in 15 minutes."
+                )
+            
             return None
+        
+        # Reset failed attempts on successful login
+        await self.user_repo.reset_failed_login_attempts(user.id)
         
         return UserResponse.model_validate(user)
 
@@ -239,28 +404,66 @@ class UserService:
         
         return UserResponse.model_validate(user)
 
-    async def update_user(self, user_id: int, user_data: UserUpdate) -> Optional[UserResponse]:
-        """Update user."""
-        user = await self.user_repo.update(user_id, user_data)
+    async def change_password(self, user_id: int, password_data: PasswordChange) -> UserResponse:
+        """Change user password with validation."""
+        user = await self.user_repo.get_by_id(user_id)
         if not user:
-            return None
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Verify current password
+        if not verify_password(password_data.current_password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect"
+            )
+
+        # Check password history
+        if not validate_password_history(password_data.new_password, user.password_history):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot reuse any of your last 5 passwords"
+            )
+
+        # Hash new password
+        new_hashed_password = get_password_hash(password_data.new_password)
         
-        return UserResponse.model_validate(user)
+        # Update password
+        updated_user = await self.user_repo.update_password(user_id, new_hashed_password)
+        
+        return UserResponse.model_validate(updated_user)
+
+    async def check_password_strength(self, password: str) -> dict:
+        """Check password strength and provide feedback."""
+        result = validate_password_strength(password)
+        
+        from src.utils.password import get_password_strength_feedback
+        feedback = get_password_strength_feedback(password)
+        
+        return {
+            "valid": result["valid"],
+            "strength_score": result["strength_score"],
+            "errors": result["errors"],
+            "feedback": feedback
+        }
 EOF
 }
 
-# Generate auth service
+# Generate auth service with password security
 generate_auth_service() {
     cat > src/services/auth.py << 'EOF'
-"""Authentication service."""
+"""Authentication service with password security features."""
 
-from datetime import timedelta
+from datetime import timedelta, datetime
 from fastapi import HTTPException, status
 
 from src.services.user import UserService
-from src.schemas.user import UserLogin, Token
+from src.schemas.user import UserLogin, Token, PasswordReset, PasswordResetConfirm
 from src.auth.jwt import create_access_token, create_refresh_token
 from src.core.config import settings
+from src.utils.password import generate_password_reset_token
 
 
 class AuthService:
@@ -268,7 +471,7 @@ class AuthService:
         self.user_service = user_service
 
     async def login(self, login_data: UserLogin) -> Token:
-        """Login user and return tokens."""
+        """Login user and return tokens with security checks."""
         user = await self.user_service.authenticate_user(
             login_data.email, 
             login_data.password
@@ -287,6 +490,13 @@ class AuthService:
                 detail="Inactive user"
             )
 
+        # Check if user needs to change password
+        if user.force_password_change:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Password change required. Please change your password before logging in."
+            )
+
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": str(user.id)}, 
@@ -299,23 +509,84 @@ class AuthService:
             access_token=access_token,
             refresh_token=refresh_token
         )
-EOF
 
-    # Create services __init__.py
-    cat > src/services/__init__.py << 'EOF'
-"""Services package."""
+    async def request_password_reset(self, reset_data: PasswordReset) -> dict:
+        """Request password reset token."""
+        from src.repositories.user import UserRepository
+        from src.core.database import get_db
+        
+        # Get database session (this would be injected in real implementation)
+        async for session in get_db():
+            user_repo = UserRepository(session)
+            
+            user = await user_repo.get_by_email(reset_data.email)
+            if not user:
+                # Don't reveal if email exists or not
+                return {"message": "If the email exists, a reset link has been sent"}
 
-from .user import UserService
-from .auth import AuthService
+            # Generate reset token
+            token = generate_password_reset_token()
+            expires_at = datetime.utcnow() + timedelta(hours=1)  # 1 hour expiry
+            
+            # Save token to database
+            await user_repo.create_password_reset_token(user.id, token, expires_at)
+            
+            # TODO: Send email with reset link (Step 5 implementation)
+            # For now, we'll just return the token (remove this in production)
+            return {
+                "message": "Password reset token generated",
+                "token": token  # Remove this in production
+            }
 
-__all__ = ["UserService", "AuthService"]
+    async def confirm_password_reset(self, reset_data: PasswordResetConfirm) -> dict:
+        """Confirm password reset with token."""
+        from src.repositories.user import UserRepository
+        from src.core.database import get_db
+        from src.auth.jwt import get_password_hash
+        
+        # Get database session (this would be injected in real implementation)
+        async for session in get_db():
+            user_repo = UserRepository(session)
+            
+            # Get and validate token
+            reset_token = await user_repo.get_password_reset_token(reset_data.token)
+            if not reset_token or not reset_token.is_valid():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid or expired reset token"
+                )
+
+            # Get user
+            user = await user_repo.get_by_id(reset_token.user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found"
+                )
+
+            # Check password history
+            from src.utils.validators import validate_password_history
+            if not validate_password_history(reset_data.new_password, user.password_history):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot reuse any of your last 5 passwords"
+                )
+
+            # Update password
+            new_hashed_password = get_password_hash(reset_data.new_password)
+            await user_repo.update_password(user.id, new_hashed_password)
+            
+            # Mark token as used
+            await user_repo.use_password_reset_token(reset_data.token)
+            
+            return {"message": "Password reset successful"}
 EOF
 }
 
-# Generate auth endpoints
+# Generate auth endpoints with password security
 generate_auth_endpoints() {
     cat > src/api/endpoints/auth.py << 'EOF'
-"""Authentication endpoints."""
+"""Authentication endpoints with password security features."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -324,8 +595,12 @@ from src.core.database import get_db
 from src.repositories.user import UserRepository
 from src.services.user import UserService
 from src.services.auth import AuthService
-from src.schemas.user import UserLogin, UserCreate, UserResponse, Token
-from src.schemas.common import StatusMessage
+from src.schemas.user import (
+    UserLogin, UserCreate, UserResponse, Token, PasswordChange,
+    PasswordReset, PasswordResetConfirm, PasswordStrengthCheck, PasswordStrengthResponse
+)
+from src.schemas.common import StatusMessage, SuccessResponse
+from src.auth.permissions import get_current_active_user
 
 router = APIRouter()
 
@@ -337,12 +612,18 @@ async def get_auth_service(session: AsyncSession = Depends(get_db)) -> AuthServi
     return AuthService(user_service)
 
 
+async def get_user_service(session: AsyncSession = Depends(get_db)) -> UserService:
+    """Get user service dependency."""
+    user_repo = UserRepository(session)
+    return UserService(user_repo)
+
+
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
     auth_service: AuthService = Depends(get_auth_service)
 ):
-    """Register a new user."""
+    """Register a new user with password validation."""
     return await auth_service.user_service.create_user(user_data)
 
 
@@ -355,12 +636,54 @@ async def login(
     return await auth_service.login(login_data)
 
 
-@router.post("/logout", response_model=StatusMessage)
-async def logout():
-    """Logout user (client-side token removal)."""
-    return StatusMessage(
-        status="success",
-        message="Successfully logged out. Please remove the token from client storage."
+@router.post("/change-password", response_model=SuccessResponse)
+async def change_password(
+    password_data: PasswordChange,
+    current_user: dict = Depends(get_current_active_user),
+    user_service: UserService = Depends(get_user_service)
+):
+    """Change user password with validation."""
+    await user_service.change_password(current_user["id"], password_data)
+    return SuccessResponse(
+        success=True,
+        message="Password changed successfully"
+    )
+
+
+@router.post("/check-password-strength", response_model=PasswordStrengthResponse)
+async def check_password_strength(
+    password_data: PasswordStrengthCheck,
+    user_service: UserService = Depends(get_user_service)
+):
+    """Check password strength and get feedback."""
+    result = await user_service.check_password_strength(password_data.password)
+    return PasswordStrengthResponse(**result)
+
+
+@router.post("/request-password-reset", response_model=SuccessResponse)
+async def request_password_reset(
+    reset_data: PasswordReset,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Request password reset token."""
+    result = await auth_service.request_password_reset(reset_data)
+    return SuccessResponse(
+        success=True,
+        message=result["message"],
+        data={"token": result.get("token")}  # Remove in production
+    )
+
+
+@router.post("/confirm-password-reset", response_model=SuccessResponse)
+async def confirm_password_reset(
+    reset_data: PasswordResetConfirm,
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Confirm password reset with token."""
+    result = await auth_service.confirm_password_reset(reset_data)
+    return SuccessResponse(
+        success=True,
+        message=result["message"]
     )
 EOF
 }
@@ -370,13 +693,13 @@ generate_user_endpoints() {
     cat > src/api/endpoints/users.py << 'EOF'
 """User endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
 from src.repositories.user import UserRepository
 from src.services.user import UserService
-from src.schemas.user import UserResponse, UserUpdate
+from src.schemas.user import UserResponse
 from src.auth.permissions import get_current_active_user
 
 router = APIRouter()
@@ -395,37 +718,7 @@ async def get_current_user_info(
 ):
     """Get current user information."""
     user = await user_service.get_user(current_user["id"])
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
     return user
-
-
-@router.put("/me", response_model=UserResponse)
-async def update_current_user(
-    user_data: UserUpdate,
-    current_user: dict = Depends(get_current_active_user),
-    user_service: UserService = Depends(get_user_service)
-):
-    """Update current user information."""
-    user = await user_service.update_user(current_user["id"], user_data)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    return user
-EOF
-
-    # Create endpoints __init__.py
-    cat > src/api/endpoints/__init__.py << 'EOF'
-"""API endpoints package."""
-
-from . import auth, users
-
-__all__ = ["auth", "users"]
 EOF
 }
 
@@ -443,17 +736,10 @@ api_router = APIRouter()
 # Include endpoint routers
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
-if settings.REDIS_ENABLED:
-    from src.api.endpoints import logout
-    api_router.include_router(logout.router, prefix="/auth", tags=["authentication"])
 EOF
 
     # Update src/api/__init__.py
     cat > src/api/__init__.py << 'EOF'
-"""API package."""
-
 from .router import api_router
-
-__all__ = ["api_router"]
 EOF
 }

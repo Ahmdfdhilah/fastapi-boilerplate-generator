@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Model file generators
+# Model file generators - Fixed with Step 1: Password Security
 
 # Generate base models
 generate_base_models() {
@@ -36,79 +36,101 @@ class BaseModel(TimestampMixin, SoftDeleteMixin, AuditMixin):
 EOF
 }
 
-# Generate user models
+# Generate user models with Step 1: Password Security
 generate_user_models() {
     cat > src/models/user.py << 'EOF'
-"""User model."""
+"""User model with password security features."""
 
 from typing import Optional, List
-from sqlmodel import Field, SQLModel, Relationship
+from datetime import datetime
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 from .base import BaseModel
 
 
-class User(BaseModel, table=True):
-    """User model."""
+class User(BaseModel, SQLModel, table=True):
+    """User model with password security features."""
     
     __tablename__ = "users"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    email: str = Field(unique=True, index=True, max_length=255)
-    hashed_password: str = Field(max_length=255)
-    first_name: str = Field(max_length=100)
-    last_name: Optional[str] = Field(default=None, max_length=100)
+    email: str = Field(unique=True, index=True)
+    hashed_password: str
+    first_name: str
+    last_name: Optional[str] = None
     is_active: bool = Field(default=True)
+    is_verified: bool = Field(default=False)
+    
+    # Password security fields (Step 1)
+    password_changed_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    password_history: List[str] = Field(default=[], sa_column=Column(JSON))
+    force_password_change: bool = Field(default=False)
+    
+    # Account security fields (for future steps)
+    failed_login_attempts: int = Field(default=0)
+    locked_until: Optional[datetime] = Field(default=None)
+    last_login: Optional[datetime] = Field(default=None)
     
     # Relationships
     roles: List["UserRole"] = Relationship(back_populates="user")
+    
+    def is_locked(self) -> bool:
+        """Check if account is currently locked."""
+        if not self.locked_until:
+            return False
+        return datetime.utcnow() < self.locked_until
+    
+    def add_password_to_history(self, hashed_password: str) -> None:
+        """Add password to history, keeping only last 5."""
+        if not self.password_history:
+            self.password_history = []
+        
+        self.password_history.append(hashed_password)
+        # Keep only last 5 passwords
+        if len(self.password_history) > 5:
+            self.password_history = self.password_history[-5:]
 
 
-class Role(BaseModel, table=True):
+class Role(BaseModel, SQLModel, table=True):
     """Role model."""
     
     __tablename__ = "roles"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str = Field(unique=True, index=True, max_length=50)
-    description: Optional[str] = Field(default=None, max_length=255)
+    name: str = Field(unique=True, index=True)
+    description: Optional[str] = None
     
     # Relationships
     users: List["UserRole"] = Relationship(back_populates="role")
 
 
-class UserRole(BaseModel, table=True):
+class UserRole(BaseModel, SQLModel, table=True):
     """User-Role association model."""
     
     __tablename__ = "user_roles"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="users.id", index=True)
-    role_id: int = Field(foreign_key="roles.id", index=True)
+    user_id: int = Field(foreign_key="users.id")
+    role_id: int = Field(foreign_key="roles.id")
     
     # Relationships
     user: User = Relationship(back_populates="roles")
     role: Role = Relationship(back_populates="users")
+
+
+class PasswordResetToken(BaseModel, SQLModel, table=True):
+    """Password reset token model."""
     
-    class Config:
-        # Ensure unique combination of user and role
-        table_args = {"extend_existing": True}
-EOF
-
-    # Create models __init__.py
-    cat > src/models/__init__.py << 'EOF'
-"""Models package."""
-
-from .base import BaseModel, TimestampMixin, SoftDeleteMixin, AuditMixin
-from .user import User, Role, UserRole
-
-__all__ = [
-    "BaseModel",
-    "TimestampMixin", 
-    "SoftDeleteMixin",
-    "AuditMixin",
-    "User",
-    "Role", 
-    "UserRole"
-]
+    __tablename__ = "password_reset_tokens"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id")
+    token: str = Field(unique=True, index=True)
+    expires_at: datetime
+    used: bool = Field(default=False)
+    
+    def is_valid(self) -> bool:
+        """Check if token is still valid."""
+        return not self.used and datetime.utcnow() < self.expires_at
 EOF
 }

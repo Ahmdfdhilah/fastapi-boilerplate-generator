@@ -1,620 +1,692 @@
 #!/bin/bash
 
-# generators/redis.sh - Redis integration generator
-# Step 1: Redis Integration for FastAPI Boilerplate
+# Redis file generators for caching and session management
 
-# Generate Redis configuration utilities
-generate_redis_config() {
+# Generate Redis connection utilities
+generate_redis_connection() {
     cat > src/core/redis.py << 'EOF'
-"""Redis configuration and connection management."""
+"""Redis connection and utilities."""
 
 import redis.asyncio as redis
-from typing import Optional
+from typing import Optional, Any
+import json
 import logging
-
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Global Redis connection pool
+redis_pool: Optional[redis.ConnectionPool] = None
+redis_client: Optional[redis.Redis] = None
 
-class RedisManager:
-    """Redis connection manager."""
+
+async def init_redis() -> None:
+    """Initialize Redis connection pool."""
+    global redis_pool, redis_client
     
-    def __init__(self):
-        self.redis_client: Optional[redis.Redis] = None
-        self._connected = False
+    if not settings.REDIS_HOST:
+        logger.warning("Redis not configured, skipping Redis initialization")
+        return
+    
+    try:
+        redis_pool = redis.ConnectionPool(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT or 6379,
+            password=settings.REDIS_PASSWORD,
+            db=settings.REDIS_DB,
+            decode_responses=True,
+            max_connections=20
+        )
+        
+        redis_client = redis.Redis(connection_pool=redis_pool)
+        
+        # Test connection
+        await redis_client.ping()
+        logger.info("✅ Redis connected successfully")
+        
+    except Exception as e:
+        logger.error(f"❌ Redis connection failed: {e}")
+        redis_pool = None
+        redis_client = None
 
-    async def connect(self) -> None:
-        """Connect to Redis server."""
-        if not settings.REDIS_ENABLED:
-            logger.info("Redis is disabled, skipping connection")
-            return
 
-        try:
-            self.redis_client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                password=settings.REDIS_PASSWORD or None,
-                db=settings.REDIS_DB,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                retry_on_timeout=True,
-                health_check_interval=30
-            )
-            
-            # Test connection
-            await self.redis_client.ping()
-            self._connected = True
-            logger.info(f"Connected to Redis at {settings.REDIS_HOST}:{settings.REDIS_PORT}")
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            self.redis_client = None
-            self._connected = False
+async def close_redis() -> None:
+    """Close Redis connection."""
+    global redis_pool, redis_client
+    
+    if redis_client:
+        await redis_client.close()
+    
+    if redis_pool:
+        await redis_pool.disconnect()
+    
+    redis_pool = None
+    redis_client = None
+    logger.info("Redis connection closed")
 
-    async def disconnect(self) -> None:
-        """Disconnect from Redis server."""
-        if self.redis_client:
-            await self.redis_client.close()
-            self._connected = False
-            logger.info("Disconnected from Redis")
 
-    @property
-    def is_connected(self) -> bool:
-        """Check if Redis is connected."""
-        return self._connected and self.redis_client is not None
+def get_redis() -> Optional[redis.Redis]:
+    """Get Redis client instance."""
+    return redis_client
 
-    async def get(self, key: str) -> Optional[str]:
-        """Get value from Redis."""
-        if not self.is_connected:
+
+async def redis_set(key: str, value: Any, expire: Optional[int] = None) -> bool:
+    """Set a value in Redis with optional expiration."""
+    if not redis_client:
+        logger.warning("Redis not available")
+        return False
+    
+    try:
+        # Serialize value to JSON if it's not a string
+        if not isinstance(value, str):
+            value = json.dumps(value)
+        
+        expire_time = expire or settings.REDIS_TTL
+        await redis_client.setex(key, expire_time, value)
+        return True
+        
+    except Exception as e:
+        logger.error(f"Redis SET error for key {key}: {e}")
+        return False
+
+
+async def redis_get(key: str) -> Optional[Any]:
+    """Get a value from Redis."""
+    if not redis_client:
+        logger.warning("Redis not available")
+        return None
+    
+    try:
+        value = await redis_client.get(key)
+        if value is None:
             return None
         
+        # Try to deserialize JSON, fallback to string
         try:
-            return await self.redis_client.get(key)
-        except Exception as e:
-            logger.error(f"Redis GET error for key {key}: {e}")
-            return None
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+            
+    except Exception as e:
+        logger.error(f"Redis GET error for key {key}: {e}")
+        return None
 
-    async def set(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
-        """Set value in Redis with optional TTL."""
-        if not self.is_connected:
-            return False
+
+async def redis_delete(key: str) -> bool:
+    """Delete a key from Redis."""
+    if not redis_client:
+        logger.warning("Redis not available")
+        return False
+    
+    try:
+        result = await redis_client.delete(key)
+        return result > 0
         
-        try:
-            if ttl:
-                return await self.redis_client.setex(key, ttl, value)
-            else:
-                return await self.redis_client.set(key, value)
-        except Exception as e:
-            logger.error(f"Redis SET error for key {key}: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"Redis DELETE error for key {key}: {e}")
+        return False
 
-    async def delete(self, key: str) -> bool:
-        """Delete key from Redis."""
-        if not self.is_connected:
-            return False
+
+async def redis_exists(key: str) -> bool:
+    """Check if a key exists in Redis."""
+    if not redis_client:
+        return False
+    
+    try:
+        result = await redis_client.exists(key)
+        return result > 0
         
-        try:
-            result = await self.redis_client.delete(key)
-            return result > 0
-        except Exception as e:
-            logger.error(f"Redis DELETE error for key {key}: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"Redis EXISTS error for key {key}: {e}")
+        return False
 
-    async def exists(self, key: str) -> bool:
-        """Check if key exists in Redis."""
-        if not self.is_connected:
-            return False
+
+async def redis_increment(key: str, amount: int = 1, expire: Optional[int] = None) -> Optional[int]:
+    """Increment a counter in Redis."""
+    if not redis_client:
+        logger.warning("Redis not available")
+        return None
+    
+    try:
+        # Use pipeline for atomic operation
+        async with redis_client.pipeline() as pipe:
+            await pipe.incrby(key, amount)
+            if expire:
+                await pipe.expire(key, expire)
+            results = await pipe.execute()
+            return results[0]
+            
+    except Exception as e:
+        logger.error(f"Redis INCREMENT error for key {key}: {e}")
+        return None
+
+
+async def redis_get_pattern(pattern: str) -> list:
+    """Get all keys matching a pattern."""
+    if not redis_client:
+        return []
+    
+    try:
+        keys = await redis_client.keys(pattern)
+        return keys
         
-        try:
-            return await self.redis_client.exists(key) > 0
-        except Exception as e:
-            logger.error(f"Redis EXISTS error for key {key}: {e}")
-            return False
+    except Exception as e:
+        logger.error(f"Redis KEYS error for pattern {pattern}: {e}")
+        return []
 
-    async def expire(self, key: str, ttl: int) -> bool:
-        """Set TTL for existing key."""
-        if not self.is_connected:
-            return False
+
+async def redis_flush_pattern(pattern: str) -> int:
+    """Delete all keys matching a pattern."""
+    if not redis_client:
+        return 0
+    
+    try:
+        keys = await redis_get_pattern(pattern)
+        if not keys:
+            return 0
         
-        try:
-            return await self.redis_client.expire(key, ttl)
-        except Exception as e:
-            logger.error(f"Redis EXPIRE error for key {key}: {e}")
-            return False
-
-
-# Global Redis manager instance
-redis_manager = RedisManager()
-
-
-async def get_redis() -> RedisManager:
-    """Dependency for getting Redis manager."""
-    return redis_manager
+        result = await redis_client.delete(*keys)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Redis FLUSH error for pattern {pattern}: {e}")
+        return 0
 EOF
 }
 
-# Generate token blacklist service
-generate_token_blacklist() {
-    cat > src/services/token_blacklist.py << 'EOF'
-"""Token blacklist service using Redis."""
+# Generate Redis cache utilities
+generate_redis_cache() {
+    cat > src/utils/cache.py << 'EOF'
+"""Cache utilities using Redis."""
+
+import functools
+import hashlib
+import json
+from typing import Any, Callable, Optional
+import logging
+from src.core.redis import redis_get, redis_set, redis_delete, redis_exists
+
+logger = logging.getLogger(__name__)
+
+
+def cache_key(*args, **kwargs) -> str:
+    """Generate a cache key from function arguments."""
+    # Create a string representation of all arguments
+    key_data = {
+        'args': args,
+        'kwargs': sorted(kwargs.items())
+    }
+    key_string = json.dumps(key_data, sort_keys=True, default=str)
+    
+    # Create a hash of the key for consistent length
+    return hashlib.md5(key_string.encode()).hexdigest()
+
+
+def redis_cache(expire: int = 3600, key_prefix: str = "cache"):
+    """
+    Decorator to cache function results in Redis.
+    
+    Args:
+        expire: Cache expiration time in seconds
+        key_prefix: Prefix for cache keys
+    """
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Generate cache key
+            func_name = f"{func.__module__}.{func.__name__}"
+            key_suffix = cache_key(*args, **kwargs)
+            cache_key_name = f"{key_prefix}:{func_name}:{key_suffix}"
+            
+            # Try to get from cache first
+            cached_result = await redis_get(cache_key_name)
+            if cached_result is not None:
+                logger.debug(f"Cache HIT for {func_name}")
+                return cached_result
+            
+            # Call the function and cache result
+            logger.debug(f"Cache MISS for {func_name}")
+            result = await func(*args, **kwargs)
+            
+            # Cache the result
+            await redis_set(cache_key_name, result, expire)
+            
+            return result
+        
+        # Add cache management methods
+        wrapper.cache_clear = lambda *args, **kwargs: redis_delete(
+            f"{key_prefix}:{func.__module__}.{func.__name__}:{cache_key(*args, **kwargs)}"
+        )
+        wrapper.cache_exists = lambda *args, **kwargs: redis_exists(
+            f"{key_prefix}:{func.__module__}.{func.__name__}:{cache_key(*args, **kwargs)}"
+        )
+        
+        return wrapper
+    return decorator
+
+
+class CacheManager:
+    """Centralized cache management."""
+    
+    def __init__(self, prefix: str = "app"):
+        self.prefix = prefix
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """Get value from cache."""
+        full_key = f"{self.prefix}:{key}"
+        return await redis_get(full_key)
+    
+    async def set(self, key: str, value: Any, expire: Optional[int] = None) -> bool:
+        """Set value in cache."""
+        full_key = f"{self.prefix}:{key}"
+        return await redis_set(full_key, value, expire)
+    
+    async def delete(self, key: str) -> bool:
+        """Delete key from cache."""
+        full_key = f"{self.prefix}:{key}"
+        return await redis_delete(full_key)
+    
+    async def exists(self, key: str) -> bool:
+        """Check if key exists in cache."""
+        full_key = f"{self.prefix}:{key}"
+        return await redis_exists(full_key)
+    
+    async def clear_pattern(self, pattern: str) -> int:
+        """Clear all keys matching pattern."""
+        from src.core.redis import redis_flush_pattern
+        full_pattern = f"{self.prefix}:{pattern}"
+        return await redis_flush_pattern(full_pattern)
+
+
+# Global cache manager instance
+cache = CacheManager()
+EOF
+}
+
+# Generate Redis session management
+generate_redis_sessions() {
+    cat > src/utils/sessions.py << 'EOF'
+"""Session management using Redis."""
 
 import json
+import uuid
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Optional
 import logging
-
-from src.core.redis import RedisManager, get_redis
+from src.core.redis import redis_set, redis_get, redis_delete, redis_exists
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class TokenBlacklistService:
-    """Service for managing token blacklist using Redis."""
+class SessionManager:
+    """Manage user sessions in Redis."""
     
-    def __init__(self, redis_manager: RedisManager):
-        self.redis = redis_manager
-        self.blacklist_prefix = "blacklist:token:"
-        self.refresh_prefix = "refresh:token:"
-
-    async def blacklist_token(self, jti: str, exp: int, token_type: str = "access") -> bool:
-        """Add token to blacklist."""
-        if not self.redis.is_connected:
-            logger.warning("Redis not connected, cannot blacklist token")
-            return False
-
-        # Calculate TTL based on token expiration
-        current_time = int(datetime.utcnow().timestamp())
-        ttl = max(0, exp - current_time)
+    def __init__(self, prefix: str = "session"):
+        self.prefix = prefix
+        self.default_expire = 3600 * 24  # 24 hours
+    
+    def _session_key(self, session_id: str) -> str:
+        """Generate session key."""
+        return f"{self.prefix}:{session_id}"
+    
+    def _user_sessions_key(self, user_id: int) -> str:
+        """Generate user sessions key."""
+        return f"{self.prefix}:user:{user_id}"
+    
+    async def create_session(self, user_id: int, data: Dict[str, Any], expire: Optional[int] = None) -> str:
+        """Create a new session."""
+        session_id = str(uuid.uuid4())
+        expire_time = expire or self.default_expire
         
-        if ttl <= 0:
-            # Token already expired, no need to blacklist
-            return True
-
-        key = f"{self.blacklist_prefix}{jti}"
-        token_data = {
-            "type": token_type,
-            "blacklisted_at": current_time,
-            "expires_at": exp
-        }
-        
-        return await self.redis.set(key, json.dumps(token_data), ttl)
-
-    async def is_token_blacklisted(self, jti: str) -> bool:
-        """Check if token is blacklisted."""
-        if not self.redis.is_connected:
-            # If Redis is not available, allow token (fail-open)
-            # In production, you might want to fail-closed
-            return False
-
-        key = f"{self.blacklist_prefix}{jti}"
-        return await self.redis.exists(key)
-
-    async def store_refresh_token(self, jti: str, user_id: int, exp: int) -> bool:
-        """Store refresh token for rotation."""
-        if not self.redis.is_connected:
-            return False
-
-        # Calculate TTL
-        current_time = int(datetime.utcnow().timestamp())
-        ttl = max(0, exp - current_time)
-        
-        if ttl <= 0:
-            return False
-
-        key = f"{self.refresh_prefix}{jti}"
-        token_data = {
+        session_data = {
             "user_id": user_id,
-            "issued_at": current_time,
-            "expires_at": exp
+            "created_at": datetime.utcnow().isoformat(),
+            "last_activity": datetime.utcnow().isoformat(),
+            "data": data
         }
         
-        return await self.redis.set(key, json.dumps(token_data), ttl)
-
-    async def get_refresh_token_data(self, jti: str) -> Optional[Dict[str, Any]]:
-        """Get refresh token data."""
-        if not self.redis.is_connected:
-            return None
-
-        key = f"{self.refresh_prefix}{jti}"
-        data = await self.redis.get(key)
+        session_key = self._session_key(session_id)
+        success = await redis_set(session_key, session_data, expire_time)
         
-        if data:
-            try:
-                return json.loads(data)
-            except json.JSONDecodeError:
-                logger.error(f"Invalid JSON in refresh token data for JTI: {jti}")
-                return None
+        if success:
+            # Track session for user
+            await self._add_user_session(user_id, session_id)
+            logger.info(f"Created session {session_id} for user {user_id}")
+            return session_id
         
-        return None
-
-    async def revoke_refresh_token(self, jti: str) -> bool:
-        """Revoke refresh token."""
-        if not self.redis.is_connected:
+        raise Exception("Failed to create session")
+    
+    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get session data."""
+        session_key = self._session_key(session_id)
+        session_data = await redis_get(session_key)
+        
+        if session_data:
+            # Update last activity
+            session_data["last_activity"] = datetime.utcnow().isoformat()
+            await redis_set(session_key, session_data, self.default_expire)
+        
+        return session_data
+    
+    async def update_session(self, session_id: str, data: Dict[str, Any]) -> bool:
+        """Update session data."""
+        session_data = await self.get_session(session_id)
+        if not session_data:
             return False
-
-        key = f"{self.refresh_prefix}{jti}"
-        return await self.redis.delete(key)
-
-    async def revoke_all_user_tokens(self, user_id: int) -> int:
-        """Revoke all tokens for a user (for logout all devices)."""
-        if not self.redis.is_connected:
-            return 0
-
-        # This is a simple implementation
-        # In production, you might want to maintain a user->tokens mapping
-        # for more efficient bulk revocation
         
-        # For now, we'll implement this in a future enhancement
-        # This method serves as a placeholder for the functionality
-        logger.info(f"Bulk token revocation for user {user_id} not yet implemented")
-        return 0
+        session_data["data"].update(data)
+        session_data["last_activity"] = datetime.utcnow().isoformat()
+        
+        session_key = self._session_key(session_id)
+        return await redis_set(session_key, session_data, self.default_expire)
+    
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session."""
+        session_data = await self.get_session(session_id)
+        if session_data:
+            user_id = session_data["user_id"]
+            await self._remove_user_session(user_id, session_id)
+        
+        session_key = self._session_key(session_id)
+        result = await redis_delete(session_key)
+        
+        if result:
+            logger.info(f"Deleted session {session_id}")
+        
+        return result
+    
+    async def delete_user_sessions(self, user_id: int) -> int:
+        """Delete all sessions for a user."""
+        sessions = await self.get_user_sessions(user_id)
+        deleted_count = 0
+        
+        for session_id in sessions:
+            if await self.delete_session(session_id):
+                deleted_count += 1
+        
+        # Clear user sessions tracking
+        user_sessions_key = self._user_sessions_key(user_id)
+        await redis_delete(user_sessions_key)
+        
+        logger.info(f"Deleted {deleted_count} sessions for user {user_id}")
+        return deleted_count
+    
+    async def get_user_sessions(self, user_id: int) -> list:
+        """Get all session IDs for a user."""
+        user_sessions_key = self._user_sessions_key(user_id)
+        sessions = await redis_get(user_sessions_key)
+        return sessions or []
+    
+    async def _add_user_session(self, user_id: int, session_id: str) -> None:
+        """Add session to user's session list."""
+        sessions = await self.get_user_sessions(user_id)
+        if session_id not in sessions:
+            sessions.append(session_id)
+            user_sessions_key = self._user_sessions_key(user_id)
+            await redis_set(user_sessions_key, sessions, self.default_expire * 2)
+    
+    async def _remove_user_session(self, user_id: int, session_id: str) -> None:
+        """Remove session from user's session list."""
+        sessions = await self.get_user_sessions(user_id)
+        if session_id in sessions:
+            sessions.remove(session_id)
+            user_sessions_key = self._user_sessions_key(user_id)
+            if sessions:
+                await redis_set(user_sessions_key, sessions, self.default_expire * 2)
+            else:
+                await redis_delete(user_sessions_key)
+    
+    async def cleanup_expired_sessions(self) -> int:
+        """Clean up expired sessions (run periodically)."""
+        from src.core.redis import redis_get_pattern
+        
+        pattern = f"{self.prefix}:*"
+        session_keys = await redis_get_pattern(pattern)
+        
+        cleaned_count = 0
+        for key in session_keys:
+            # Skip user session tracking keys
+            if ":user:" in key:
+                continue
+            
+            session_data = await redis_get(key)
+            if not session_data:
+                cleaned_count += 1
+                continue
+            
+            # Check if session is too old (more than 7 days of inactivity)
+            try:
+                last_activity = datetime.fromisoformat(session_data["last_activity"])
+                if datetime.utcnow() - last_activity > timedelta(days=7):
+                    session_id = key.split(":")[-1]
+                    await self.delete_session(session_id)
+                    cleaned_count += 1
+            except (KeyError, ValueError):
+                # Invalid session data, delete it
+                await redis_delete(key)
+                cleaned_count += 1
+        
+        if cleaned_count > 0:
+            logger.info(f"Cleaned up {cleaned_count} expired sessions")
+        
+        return cleaned_count
 
-    async def cleanup_expired_tokens(self) -> int:
-        """Cleanup expired tokens (Redis handles this automatically with TTL)."""
-        # Redis automatically removes expired keys
-        # This method can be used for additional cleanup logic if needed
-        return 0
 
-
-async def get_token_blacklist_service(
-    redis_manager: RedisManager = None
-) -> TokenBlacklistService:
-    """Dependency for getting token blacklist service."""
-    if redis_manager is None:
-        redis_manager = await get_redis()
-    return TokenBlacklistService(redis_manager)
+# Global session manager instance
+session_manager = SessionManager()
 EOF
 }
 
-# Update JWT handling to support JTI and blacklist
-generate_enhanced_jwt() {
-    cat > src/auth/jwt_enhanced.py << 'EOF'
-"""Enhanced JWT token handling with blacklist support."""
+# Generate Redis rate limiting utilities
+generate_redis_rate_limiting() {
+    cat > src/utils/rate_limiting.py << 'EOF'
+"""Rate limiting utilities using Redis."""
 
-import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Optional, Any, Tuple
-from jose import jwt, JWTError
+import time
+from typing import Optional, Tuple
+from src.core.redis import redis_get, redis_set, redis_increment
+import logging
 
+logger = logging.getLogger(__name__)
+
+
+class RateLimiter:
+    """Redis-based rate limiter."""
+    
+    def __init__(self, prefix: str = "rate_limit"):
+        self.prefix = prefix
+    
+    def _get_key(self, identifier: str, window: str) -> str:
+        """Generate rate limit key."""
+        return f"{self.prefix}:{identifier}:{window}"
+    
+    async def is_allowed(
+        self, 
+        identifier: str, 
+        limit: int, 
+        window_seconds: int,
+        identifier_type: str = "ip"
+    ) -> Tuple[bool, int, int]:
+        """
+        Check if request is allowed based on rate limit.
+        
+        Returns:
+            Tuple of (is_allowed, current_count, remaining)
+        """
+        current_window = int(time.time()) // window_seconds
+        key = self._get_key(f"{identifier_type}:{identifier}", str(current_window))
+        
+        # Get current count
+        current_count = await redis_increment(key, 1, window_seconds)
+        
+        if current_count is None:
+            # Redis not available, allow request
+            logger.warning("Redis not available for rate limiting, allowing request")
+            return True, 0, limit
+        
+        is_allowed = current_count <= limit
+        remaining = max(0, limit - current_count)
+        
+        if not is_allowed:
+            logger.warning(f"Rate limit exceeded for {identifier_type}:{identifier}")
+        
+        return is_allowed, current_count, remaining
+    
+    async def reset_limit(self, identifier: str, identifier_type: str = "ip") -> bool:
+        """Reset rate limit for an identifier."""
+        from src.core.redis import redis_flush_pattern
+        
+        pattern = f"{self.prefix}:{identifier_type}:{identifier}:*"
+        deleted_count = await redis_flush_pattern(pattern)
+        
+        if deleted_count > 0:
+            logger.info(f"Reset rate limit for {identifier_type}:{identifier}")
+        
+        return deleted_count > 0
+
+
+class FailedAttemptTracker:
+    """Track failed login attempts with Redis."""
+    
+    def __init__(self, prefix: str = "failed_attempts"):
+        self.prefix = prefix
+    
+    def _get_key(self, identifier: str) -> str:
+        """Generate failed attempts key."""
+        return f"{self.prefix}:{identifier}"
+    
+    async def record_failure(self, identifier: str, window_seconds: int = 3600) -> int:
+        """Record a failed attempt."""
+        key = self._get_key(identifier)
+        count = await redis_increment(key, 1, window_seconds)
+        
+        if count:
+            logger.warning(f"Failed attempt recorded for {identifier}, count: {count}")
+        
+        return count or 1
+    
+    async def get_failure_count(self, identifier: str) -> int:
+        """Get current failure count."""
+        key = self._get_key(identifier)
+        count = await redis_get(key)
+        return int(count) if count else 0
+    
+    async def reset_failures(self, identifier: str) -> bool:
+        """Reset failure count."""
+        from src.core.redis import redis_delete
+        
+        key = self._get_key(identifier)
+        result = await redis_delete(key)
+        
+        if result:
+            logger.info(f"Reset failure count for {identifier}")
+        
+        return result
+    
+    async def is_blocked(self, identifier: str, max_attempts: int = 5) -> bool:
+        """Check if identifier is blocked due to too many failures."""
+        count = await self.get_failure_count(identifier)
+        return count >= max_attempts
+
+
+# Global instances
+rate_limiter = RateLimiter()
+failed_attempts = FailedAttemptTracker()
+EOF
+}
+
+# Generate Redis middleware for rate limiting
+generate_redis_middleware() {
+    cat > src/middleware/rate_limit.py << 'EOF'
+"""Rate limiting middleware using Redis."""
+
+import time
+from fastapi import Request, HTTPException, status
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from src.utils.rate_limiting import rate_limiter
 from src.core.config import settings
-from src.auth.jwt import verify_password, get_password_hash  # Keep existing functions
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def create_access_token(
-    data: Dict[str, Any], 
-    expires_delta: Optional[timedelta] = None
-) -> Tuple[str, str]:
-    """Create a JWT access token with JTI (JWT ID)."""
-    to_encode = data.copy()
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Rate limiting middleware."""
     
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    def __init__(self, app, calls_per_minute: int = 60, calls_per_hour: int = 1000):
+        super().__init__(app)
+        self.calls_per_minute = calls_per_minute
+        self.calls_per_hour = calls_per_hour
     
-    # Generate unique JTI (JWT ID) for token identification
-    jti = str(uuid.uuid4())
+    def get_client_ip(self, request: Request) -> str:
+        """Get client IP address."""
+        # Check for forwarded headers
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip
+        
+        # Fallback to direct client IP
+        return request.client.host if request.client else "unknown"
     
-    to_encode.update({
-        "exp": expire,
-        "iat": datetime.utcnow(),
-        "type": "access",
-        "jti": jti
-    })
-    
-    encoded_jwt = jwt.encode(
-        to_encode, 
-        settings.JWT_SECRET_KEY, 
-        algorithm=settings.ALGORITHM
-    )
-    
-    return encoded_jwt, jti
-
-
-def create_refresh_token(data: Dict[str, Any]) -> Tuple[str, str]:
-    """Create a JWT refresh token with JTI."""
-    to_encode = data.copy()
-    
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    jti = str(uuid.uuid4())
-    
-    to_encode.update({
-        "exp": expire,
-        "iat": datetime.utcnow(),
-        "type": "refresh",
-        "jti": jti
-    })
-    
-    encoded_jwt = jwt.encode(
-        to_encode, 
-        settings.JWT_SECRET_KEY, 
-        algorithm=settings.ALGORITHM
-    )
-    
-    return encoded_jwt, jti
-
-
-def verify_token(token: str) -> Dict[str, Any]:
-    """Verify and decode a JWT token."""
-    try:
-        payload = jwt.decode(
-            token, 
-            settings.JWT_SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
+    async def dispatch(self, request: Request, call_next):
+        """Apply rate limiting."""
+        client_ip = self.get_client_ip(request)
+        
+        # Skip rate limiting for health checks
+        if request.url.path in ["/health", "/", "/docs", "/redoc", "/openapi.json"]:
+            return await call_next(request)
+        
+        # Check minute-based rate limit
+        minute_allowed, minute_count, minute_remaining = await rate_limiter.is_allowed(
+            client_ip, self.calls_per_minute, 60, "ip"
         )
-        return payload
-    except JWTError as e:
-        raise JWTError(f"Token verification failed: {str(e)}")
+        
+        # Check hour-based rate limit
+        hour_allowed, hour_count, hour_remaining = await rate_limiter.is_allowed(
+            client_ip, self.calls_per_hour, 3600, "ip"
+        )
+        
+        if not minute_allowed or not hour_allowed:
+            # Rate limit exceeded
+            retry_after = 60 if not minute_allowed else 3600
+            
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": "Rate limit exceeded",
+                    "retry_after": retry_after,
+                    "minute_limit": self.calls_per_minute,
+                    "hour_limit": self.calls_per_hour
+                },
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Limit-Minute": str(self.calls_per_minute),
+                    "X-RateLimit-Remaining-Minute": str(minute_remaining),
+                    "X-RateLimit-Limit-Hour": str(self.calls_per_hour),
+                    "X-RateLimit-Remaining-Hour": str(hour_remaining),
+                }
+            )
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Add rate limit headers to response
+        response.headers["X-RateLimit-Limit-Minute"] = str(self.calls_per_minute)
+        response.headers["X-RateLimit-Remaining-Minute"] = str(minute_remaining)
+        response.headers["X-RateLimit-Limit-Hour"] = str(self.calls_per_hour)
+        response.headers["X-RateLimit-Remaining-Hour"] = str(hour_remaining)
+        
+        return response
 
 
-def extract_jti_from_token(token: str) -> Optional[str]:
-    """Extract JTI from token without full verification (for blacklist check)."""
-    try:
-        # Decode without verification to get JTI quickly
-        payload = jwt.get_unverified_claims(token)
-        return payload.get("jti")
-    except Exception:
-        return None
-
-
-def get_token_expiry(token: str) -> Optional[int]:
-    """Get token expiry timestamp."""
-    try:
-        payload = jwt.get_unverified_claims(token)
-        return payload.get("exp")
-    except Exception:
-        return None
+def setup_rate_limiting_middleware(app, calls_per_minute: int = 60, calls_per_hour: int = 1000):
+    """Setup rate limiting middleware."""
+    app.add_middleware(RateLimitMiddleware, calls_per_minute=calls_per_minute, calls_per_hour=calls_per_hour)
 EOF
-}
-
-# Update authentication permissions with blacklist check
-generate_enhanced_permissions() {
-    cat > src/auth/permissions_enhanced.py << 'EOF'
-"""Enhanced authorization with token blacklist checking."""
-
-from typing import List, Dict, Optional
-from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError
-
-from src.auth.jwt_enhanced import verify_token, extract_jti_from_token
-from src.services.token_blacklist import get_token_blacklist_service, TokenBlacklistService
-from src.core.database import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
-from src.repositories.user import UserRepository
-
-
-class JWTBearerWithBlacklist(HTTPBearer):
-    """JWT Bearer with blacklist checking."""
-    
-    def __init__(self, auto_error: bool = True):
-        super(JWTBearerWithBlacklist, self).__init__(auto_error=auto_error)
-
-    async def __call__(self, request: Request):
-        credentials: HTTPAuthorizationCredentials = await super(
-            JWTBearerWithBlacklist, self
-        ).__call__(request)
-        if credentials:
-            if not credentials.scheme == "Bearer":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Invalid authentication scheme.",
-                )
-            return credentials.credentials
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid authorization code.",
-            )
-
-
-jwt_bearer = JWTBearerWithBlacklist()
-
-
-async def get_current_user(
-    token: str = Depends(jwt_bearer), 
-    session: AsyncSession = Depends(get_db),
-    blacklist_service: TokenBlacklistService = Depends(get_token_blacklist_service)
-) -> Dict:
-    """Get the current authenticated user with blacklist checking."""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        # First, check if token is blacklisted (quick check)
-        jti = extract_jti_from_token(token)
-        if jti and await blacklist_service.is_token_blacklisted(jti):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has been revoked",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        # Then verify token
-        payload = verify_token(token)
-        user_id = payload.get("sub")
-        token_type = payload.get("type", "access")
-        
-        if not user_id or token_type != "access":
-            raise credentials_exception
-
-        user_repo = UserRepository(session)
-        user = await user_repo.get_by_id(int(user_id))
-
-        if not user:
-            raise credentials_exception
-
-        # Get user roles
-        user_roles = await user_repo.get_user_roles(user.id)
-        roles = [role.name for role in user_roles]
-
-        user_data = {
-            "id": user.id,
-            "email": user.email,
-            "name": f"{user.first_name} {user.last_name}".strip(),
-            "roles": roles,
-            "is_active": user.is_active,
-            "jti": jti  # Include JTI for logout purposes
-        }
-
-        return user_data
-
-    except JWTError:
-        raise credentials_exception
-
-
-async def get_current_active_user(
-    current_user: Dict = Depends(get_current_user),
-) -> Dict:
-    """Check if the current user is active."""
-    if not current_user.get("is_active"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
-            detail="Inactive user"
-        )
-    return current_user
-
-
-def require_roles(required_roles: List[str]):
-    """Decorator to require specific roles."""
-    async def _check_roles(
-        current_user: Dict = Depends(get_current_active_user),
-    ) -> Dict:
-        user_roles = current_user.get("roles", [])
-        
-        if not any(role in user_roles for role in required_roles):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Required roles: {', '.join(required_roles)}",
-            )
-        
-        return current_user
-    
-    return _check_roles
-
-
-# Common role dependencies
-admin_required = require_roles(["admin"])
-user_required = require_roles(["user", "admin"])
-EOF
-}
-
-# Generate logout endpoint
-generate_logout_endpoint() {
-    cat > src/api/endpoints/logout.py << 'EOF'
-"""Logout endpoint with token revocation."""
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.core.database import get_db
-from src.auth.permissions_enhanced import get_current_active_user
-from src.auth.jwt_enhanced import get_token_expiry
-from src.services.token_blacklist import get_token_blacklist_service, TokenBlacklistService
-from src.schemas.common import StatusMessage
-
-router = APIRouter()
-
-
-@router.post("/logout", response_model=StatusMessage)
-async def logout(
-    current_user: dict = Depends(get_current_active_user),
-    blacklist_service: TokenBlacklistService = Depends(get_token_blacklist_service)
-):
-    """Logout user by blacklisting the current token."""
-    try:
-        jti = current_user.get("jti")
-        if not jti:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid token format"
-            )
-
-        # Get token expiry (we need this for TTL calculation)
-        # In a real implementation, you might want to pass the original token
-        # For now, we'll use a default TTL
-        
-        # Blacklist the token
-        success = await blacklist_service.blacklist_token(
-            jti=jti,
-            exp=int(settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60),  # Convert to seconds
-            token_type="access"
-        )
-        
-        if not success:
-            # If Redis is down, we might want to handle this differently
-            return StatusMessage(
-                status="warning",
-                message="Logout completed, but token revocation may not be effective"
-            )
-
-        return StatusMessage(
-            status="success",
-            message="Successfully logged out"
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Logout failed"
-        )
-
-
-@router.post("/logout-all", response_model=StatusMessage)
-async def logout_all_devices(
-    current_user: dict = Depends(get_current_active_user),
-    blacklist_service: TokenBlacklistService = Depends(get_token_blacklist_service)
-):
-    """Logout user from all devices (placeholder for future implementation)."""
-    # This is a placeholder for bulk token revocation
-    # Full implementation will come in next steps
-    
-    user_id = current_user.get("id")
-    revoked_count = await blacklist_service.revoke_all_user_tokens(user_id)
-    
-    return StatusMessage(
-        status="success",
-        message=f"Logout from all devices initiated (feature coming soon)"
-    )
-EOF
-}
-
-print_step "Step 1: Redis Integration - Generator Created"
-print_status "Files that will be generated:"
-echo "  - src/core/redis.py (Redis connection manager)"
-echo "  - src/services/token_blacklist.py (Token blacklist service)"
-echo "  - src/auth/jwt_enhanced.py (Enhanced JWT with JTI)"
-echo "  - src/auth/permissions_enhanced.py (Enhanced auth with blacklist)"
-echo "  - src/api/endpoints/logout.py (Logout endpoints)"
-echo ""
-print_status "Configuration updates needed:"
-echo "  - Enhanced .env file with Redis options"
-echo "  - Updated core/config.py with Redis settings"
-echo "  - Updated requirements.txt with Redis dependency"
-echo "  - Modified interactive setup for Redis choice"
-
-generate_redis_integration() {
-    print_header "Redis Integration - Step 1"
-    
-    # Source the Redis generator
-    source "$SCRIPT_DIR/generators/redis.sh"
-    
-    print_step "Generating Redis core files..."
-    generate_redis_config
-    generate_token_blacklist
-    
-    print_step "Generating enhanced JWT system..."
-    generate_enhanced_jwt
-    generate_enhanced_permissions
-    
-    print_step "Generating logout endpoints..."
-    generate_logout_endpoint
-    
-    print_success "Redis integration files generated successfully"
 }

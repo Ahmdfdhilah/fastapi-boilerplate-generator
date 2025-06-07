@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Core file generators for FastAPI boilerplate
+# Core file generators for FastAPI boilerplate - Fixed with Step 1
 
 # Generate .env file
 generate_env_file() {
-    local db_name=$(echo "$PROJECT_NAME" | sed 's/[^a-zA-Z0-9]/_/g' | tr '[:upper:]' '[:lower:]')_db
+    local db_name=$(echo "$PROJECT_DIR" | sed 's/-/_/g')_db
     local jwt_secret=$(generate_jwt_secret)
     
     cat > .env << EOF
@@ -52,69 +52,66 @@ MAX_FILENAME_LENGTH=$DEFAULT_MAX_FILENAME_LENGTH
 LOG_DIRECTORY=$DEFAULT_LOG_DIRECTORY
 LOG_MAX_BYTES=$DEFAULT_LOG_MAX_BYTES
 LOG_BACKUP_COUNT=$DEFAULT_LOG_BACKUP_COUNT
-SERVICE_NAME="$PROJECT_NAME"
+SERVICE_NAME="$PROJECT_DIR"
+
+# Password Security Settings (Step 1)
+PASSWORD_MIN_LENGTH=12
+PASSWORD_MAX_LENGTH=128
+PASSWORD_HISTORY_COUNT=5
+PASSWORD_MAX_AGE_DAYS=90
+ACCOUNT_LOCKOUT_ATTEMPTS=5
+ACCOUNT_LOCKOUT_DURATION_MINUTES=15
 EOF
 }
 
-# Generate requirements.txt
+# Generate requirements.txt with Step 1 additions and Redis
 generate_requirements() {
     cat > requirements.txt << EOF
 # FastAPI and dependencies
-alembic==1.13.1
-annotated-types==0.7.0
-anyio==3.7.1
-async-timeout==5.0.1
-asyncpg==0.29.0
-bcrypt==4.3.0
-bleach==6.1.0
-certifi==2025.4.26
-cffi==1.17.1
-click==8.2.1
-colorama==0.4.6
-cryptography==45.0.3
-dnspython==2.7.0
-ecdsa==0.19.1
-email_validator==2.2.0
 fastapi==0.104.1
-greenlet==3.2.3
-h11==0.16.0
-httpcore==1.0.9
-httptools==0.6.4
-httpx==0.25.2
-idna==3.10
-iniconfig==2.1.0
-Mako==1.3.10
-MarkupSafe==3.0.2
-packaging==25.0
-passlib==1.7.4
-pluggy==1.6.0
-pyasn1==0.6.1
-pycparser==2.22
+uvicorn[standard]==0.24.0
+starlette==0.27.0
+
+# Database
+sqlmodel==0.0.14
+sqlalchemy==2.0.41
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Data validation
 pydantic==2.5.0
 pydantic-settings==2.1.0
-pydantic_core==2.14.1
+email-validator==2.2.0
+
+# Environment
+python-dotenv==1.1.0
+
+# HTTP client (for testing and OAuth)
+httpx==0.25.2
+
+# Redis for caching and sessions
+redis[hiredis]==5.0.1
+
+# Development and testing
 pytest==7.4.3
 pytest-asyncio==0.21.1
-python-dotenv==1.1.0
-python-jose==3.3.0
-python-multipart==0.0.6
-python-slugify==8.0.1
-PyYAML==6.0.2
-rsa==4.9.1
-six==1.17.0
-sniffio==1.3.1
-SQLAlchemy==2.0.41
-sqlmodel==0.0.14
-starlette==0.27.0
-text-unidecode==1.3
-typing_extensions==4.14.0
-uvicorn==0.24.0
-watchfiles==1.0.5
-webencodings==0.5.1
-websockets==15.0.1
 
-# Redis for caching and token management (conditionally included)
-redis==5.0.1
+# Utilities
+python-slugify==8.0.1
+
+# Step 1: Password Security additions
+# (Already included in passlib[bcrypt] and python-jose[cryptography])
+
+# Future steps will add:
+# pyotp - for TOTP MFA (Step 3)
+# qrcode[pil] - for QR code generation (Step 3) 
+# slowapi - for rate limiting (Step 2) - Redis-based rate limiting included
+# sib-api-v3-sdk - for Brevo email service (Step 5)
 EOF
 
     # Add additional requirements if specified
@@ -156,20 +153,17 @@ wheels/
 venv/
 env/
 ENV/
-.venv/
 
 # Environment variables
 .env
 .env.local
 .env.production
-.env.staging
 
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # Logs
 logs/
@@ -178,15 +172,9 @@ logs/
 # Database
 *.db
 *.sqlite
-*.sqlite3
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # Uploads
@@ -197,61 +185,21 @@ static/uploads/
 .coverage
 .pytest_cache/
 htmlcov/
-.tox/
-.nox/
 
 # Alembic
 alembic/versions/*.py
 !alembic/versions/__init__.py
 
-# Documentation
-.sphinx/
-docs/_build/
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-.hypothesis/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# Package files
-*.egg-info/
-dist/
-build/
+# Security (Step 1 additions)
+# Don't commit any security-related files
+*.key
+*.pem
+*.crt
+backup_codes.txt
 EOF
 }
 
-# Generate core config
+# Generate core config with Step 1 additions
 generate_core_config() {
     cat > src/core/config.py << 'EOF'
 """Application settings and configuration."""
@@ -265,51 +213,59 @@ class Settings(BaseSettings):
     """Application settings with environment variable loading."""
 
     # API settings
-    PROJECT_NAME="$PROJECT_NAME"
-    VERSION="1.0.0"
-    DEBUG=true
-    API_V1_STR="/api/v1"
+    PROJECT_NAME: str
+    VERSION: str = "1.0.0"
+    DEBUG: bool = False
+    API_V1_STR: str = "/api/v1"
 
-    # CORS Settings
-    CORS_ORIGINS="$DEFAULT_CORS_ORIGINS"
-    CORS_HEADERS="$DEFAULT_CORS_HEADERS"
-    CORS_METHODS="$DEFAULT_CORS_METHODS"
+    # CORS
+    CORS_ORIGINS: str = "*"
+    CORS_HEADERS: str = "*"
+    CORS_METHODS: str = "*"
 
-    # Database Settings (PostgreSQL)
-    POSTGRES_SERVER=$DEFAULT_DB_HOST
-    POSTGRES_PORT=$DEFAULT_DB_PORT
-    POSTGRES_USER=postgres
-    POSTGRES_PASSWORD=password
-    POSTGRES_DB=$db_name
+    # Database
+    POSTGRES_SERVER: str
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+    POSTGRES_DB: str
+    POSTGRES_PORT: str = "5432"
+    DATABASE_URI: Optional[PostgresDsn] = None
+    SQL_ECHO: bool = False
 
-    # Database Pool Settings
-    DB_POOL_SIZE=10
-    DB_MAX_OVERFLOW=20
-    SQL_ECHO=false
+    # Database connection pool settings
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
 
     # JWT Settings
-    JWT_SECRET_KEY=$jwt_secret
-    ALGORITHM=$DEFAULT_JWT_ALGORITHM
-    ACCESS_TOKEN_EXPIRE_MINUTES=$DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES
-    REFRESH_TOKEN_EXPIRE_DAYS=$DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS
+    JWT_SECRET_KEY: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # Redis Settings (Token Management & Caching)
-    REDIS_ENABLED=$REDIS_ENABLED
-    REDIS_HOST=$DEFAULT_REDIS_HOST
-    REDIS_PORT=$DEFAULT_REDIS_PORT
-    REDIS_PASSWORD=
-    REDIS_DB=0
-    REDIS_TTL=3600
+    # Redis (optional)
+    REDIS_HOST: Optional[str] = None
+    REDIS_PORT: Optional[int] = None
+    REDIS_PASSWORD: Optional[str] = None
+    REDIS_DB: int = 0
+    REDIS_TTL: int = 3600
 
-    # File Upload Settings
-    MAX_UPLOAD_SIZE=$DEFAULT_MAX_UPLOAD_SIZE
-    MAX_FILENAME_LENGTH=$DEFAULT_MAX_FILENAME_LENGTH
+    # File handling
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
+    MAX_FILENAME_LENGTH: int = 50
 
-    # Logging Settings
-    LOG_DIRECTORY=$DEFAULT_LOG_DIRECTORY
-    LOG_MAX_BYTES=$DEFAULT_LOG_MAX_BYTES
-    LOG_BACKUP_COUNT=$DEFAULT_LOG_BACKUP_COUNT
-    SERVICE_NAME="$PROJECT_DIR"
+    # Logging
+    LOG_DIRECTORY: str = "logs"
+    LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 10MB
+    LOG_BACKUP_COUNT: int = 5
+    SERVICE_NAME: str
+
+    # Password Security Settings (Step 1)
+    PASSWORD_MIN_LENGTH: int = 12
+    PASSWORD_MAX_LENGTH: int = 128
+    PASSWORD_HISTORY_COUNT: int = 5
+    PASSWORD_MAX_AGE_DAYS: int = 90
+    ACCOUNT_LOCKOUT_ATTEMPTS: int = 5
+    ACCOUNT_LOCKOUT_DURATION_MINUTES: int = 15
 
     @field_validator("DATABASE_URI", mode="before")
     def assemble_db_connection(cls, v: Optional[str], info: Dict[str, Any]) -> Any:
@@ -363,16 +319,6 @@ class Settings(BaseSettings):
 
 # Create global settings instance
 settings = Settings()
-EOF
-
-    # Create core __init__.py
-    cat > src/core/__init__.py << 'EOF'
-"""Core package."""
-
-from .config import settings
-from .database import get_db, init_db
-
-__all__ = ["settings", "get_db", "init_db"]
 EOF
 }
 
@@ -433,7 +379,7 @@ EOF
 # Generate main application
 generate_main_app() {
     cat > main.py << EOF
-"""Main FastAPI application with Redis integration.
+"""Main FastAPI application.
 
 Generated by FastAPI Boilerplate Generator
 Project: $PROJECT_NAME
@@ -442,17 +388,13 @@ Author: $AUTHOR_NAME <$AUTHOR_EMAIL>
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
 
 from src.core.config import settings
 from src.core.database import init_db
-from src.core.redis import redis_manager
 from src.api import api_router
 from src.middleware.error_handler import setup_exception_handlers
 from src.middleware.logging import setup_logging_middleware
 from src.utils.logging import setup_logging
-
-logger = logging.getLogger(__name__)
 
 # Create FastAPI application
 app = FastAPI(
@@ -489,51 +431,24 @@ async def root():
         "message": f"Welcome to {settings.PROJECT_NAME}",
         "version": settings.VERSION,
         "docs": "/docs",
-        "redis_enabled": settings.REDIS_ENABLED,
     }
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    redis_status = "connected" if redis_manager.is_connected else "disconnected"
-    
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "redis": {
-            "enabled": settings.REDIS_ENABLED,
-            "status": redis_status if settings.REDIS_ENABLED else "disabled"
-        }
     }
 
 
 @app.on_event("startup")
 async def startup_event():
     """Startup event handler."""
-    # Initialize database
     await init_db()
-    
-    # Initialize Redis if enabled
-    if settings.REDIS_ENABLED:
-        await redis_manager.connect()
-        if redis_manager.is_connected:
-            logger.info("✅ Redis connected successfully")
-        else:
-            logger.warning("⚠️  Redis connection failed - running without Redis features")
-    else:
-        logger.info("ℹ️  Redis disabled - token revocation not available")
-    
     print(f"🚀 {settings.PROJECT_NAME} started successfully")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Shutdown event handler."""
-    if settings.REDIS_ENABLED and redis_manager.is_connected:
-        await redis_manager.disconnect()
-        logger.info("Redis disconnected")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# FastAPI JWT Boilerplate Generator - Main Script
-# Modular version for easy customization and maintenance
+# FastAPI JWT Boilerplate Generator - Complete Main Script with Step 1
+# Password Security Standards Implementation
 
 set -e
 
@@ -25,7 +25,7 @@ source "$SCRIPT_DIR/generators/redis.sh"
 
 # Function to show usage
 show_usage() {
-    echo -e "${BLUE}FastAPI JWT Boilerplate Generator${NC}"
+    echo -e "${BLUE}FastAPI JWT Boilerplate Generator with Password Security${NC}"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -38,6 +38,14 @@ show_usage() {
     echo "  --no-docker               Skip Docker configuration (default)"
     echo "  --config FILE             Use custom configuration file"
     echo "  -h, --help                Show this help message"
+    echo ""
+    echo "Features included:"
+    echo "  ✓ STEP 1: Password Security Standards (OWASP compliant)"
+    echo "  ✓ Strong password validation (12+ chars, complexity)"
+    echo "  ✓ Password history tracking (prevent reuse of last 5)"
+    echo "  ✓ Account lockout protection (5 failed attempts)"
+    echo "  ✓ Common password blacklist"
+    echo "  ✓ Password strength scoring and feedback"
     echo ""
     echo "Examples:"
     echo "  $0 -n my-api -a \"John Doe\" -e john@example.com --docker"
@@ -100,16 +108,16 @@ load_custom_config() {
 
 # Interactive mode for gathering project details
 interactive_setup() {
-    echo -e "${BLUE}=== FastAPI JWT Boilerplate Generator ===${NC}"
+    echo -e "${BLUE}=== FastAPI JWT Boilerplate Generator (with Password Security) ===${NC}"
     echo ""
 
     PROJECT_NAME=$(prompt_with_default "Enter project name" "${PROJECT_NAME:-my-fastapi-service}")
-    PROJECT_DESCRIPTION=$(prompt_with_default "Enter project description" "${PROJECT_DESCRIPTION:-FastAPI service with JWT authentication}")
+    PROJECT_DESCRIPTION=$(prompt_with_default "Enter project description" "${PROJECT_DESCRIPTION:-FastAPI service with JWT authentication and password security}")
     AUTHOR_NAME=$(prompt_with_default "Enter author name" "${AUTHOR_NAME:-$(get_git_user_name)}")
     AUTHOR_EMAIL=$(prompt_with_default "Enter author email" "${AUTHOR_EMAIL:-$(get_git_user_email)}")
 
     # Prompt user for the parent directory
-    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (leave blank for parent directory): ${NC}")" PARENT_DIR_INPUT
+    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (or leave blank for parent directory): ${NC}")" PARENT_DIR_INPUT
     
     # Resolve the absolute path of the parent directory
     if [[ -z "$PARENT_DIR_INPUT" ]]; then
@@ -140,6 +148,7 @@ interactive_setup() {
             fi
         fi
     fi
+    echo -e "${YELLOW}Project will be created in: $PROJECT_PARENT_DIR/${PROJECT_NAME}${NC}"
 
     # Ask for deployment preference if not set
     if [[ -z "$USE_DOCKER" ]]; then
@@ -165,32 +174,6 @@ interactive_setup() {
                 ;;
         esac
     fi
-
-    # Redis Configuration Choice
-    echo ""
-    print_status "Redis Configuration:"
-    echo "Redis provides token blacklist functionality and caching capabilities."
-    echo "Without Redis, tokens cannot be revoked until they expire naturally."
-    echo ""
-    echo "1. Enable Redis (Recommended for production)"
-    echo "2. Skip Redis (Basic JWT only)"
-    echo ""
-    REDIS_CHOICE=$(prompt_with_default "Enter your choice (1 or 2)" "1")
-
-    case $REDIS_CHOICE in
-        1)
-            REDIS_ENABLED=true
-            print_success "Redis enabled - Token revocation and caching available"
-            ;;
-        2)
-            REDIS_ENABLED=false
-            print_warning "Redis disabled - Tokens cannot be revoked before expiry"
-            ;;
-        *)
-            REDIS_ENABLED=true
-            print_warning "Invalid choice, defaulting to Redis enabled"
-            ;;
-    esac
 }
 
 # Validate project configuration
@@ -206,8 +189,10 @@ validate_config() {
     fi
 
     # Validate email if provided
-    if [[ -n "$AUTHOR_EMAIL" ]] && ! validate_email "$AUTHOR_EMAIL"; then
-        print_warning "Invalid email format: $AUTHOR_EMAIL"
+    if [[ -n "$AUTHOR_EMAIL" ]]; then
+        if ! [[ "$AUTHOR_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            print_warning "Author email format may be invalid"
+        fi
     fi
 }
 
@@ -224,107 +209,113 @@ create_project_structure() {
     # Check if directory already exists
     if [[ -d "$PROJECT_FULL_PATH" ]]; then
         print_error "Directory $PROJECT_FULL_PATH already exists!"
-        if confirm "Do you want to continue and overwrite existing files?"; then
-            print_warning "Continuing with existing directory..."
+        if confirm "Do you want to remove the existing directory and continue?"; then
+            rm -rf "$PROJECT_FULL_PATH"
+            print_status "Removed existing directory"
         else
-            print_status "Operation cancelled."
             exit 1
         fi
     fi
 
-    # Create and enter project directory
+    # Create project structure
     mkdir -p "$PROJECT_FULL_PATH"
     cd "$PROJECT_FULL_PATH"
 
-    print_status "Creating project structure..."
+    # Set PROJECT_DIR for use in generators
+    PROJECT_DIR="$PROJECT_DIR_NAME"
 
-    # Create directory structure
+    print_header "Creating FastAPI Project with Password Security"
+
+    print_step "Creating project structure..."
     create_directories
 
-    print_status "Generating configuration files..."
+    print_step "Generating configuration files..."
     generate_env_file
     generate_requirements
     generate_gitignore
 
-    print_status "Generating core files..."
+    print_step "Generating core files..."
     generate_core_config
     generate_database_config
 
-    print_status "Generating authentication system..."
+    print_step "Generating authentication system..."
     generate_auth_jwt
     generate_auth_permissions
 
-    print_status "Generating models..."
+    print_step "Generating models with password security..."
     generate_base_models
     generate_user_models
 
-    print_status "Generating schemas..."
+    print_step "Generating schemas with password validation..."
     generate_user_schemas
     generate_common_schemas
 
-    print_status "Generating repositories..."
+    print_step "Generating repositories..."
     generate_user_repository
 
-    print_status "Generating services..."
+    print_step "Generating services with password security..."
     generate_user_service
     generate_auth_service
 
-    print_status "Generating API endpoints..."
+    print_step "Generating API endpoints..."
     generate_auth_endpoints
     generate_user_endpoints
     generate_api_router
 
-    print_status "Generating middleware..."
+    print_step "Generating middleware..."
     generate_error_handler
     generate_logging_middleware
 
-    print_status "Generating utilities..."
-    generate_logging_utils
+    print_step "Generating utilities with password validation..."
     generate_validators
+    generate_logging_utils
+    generate_password_utils
 
-    print_status "Generating main application..."
+    print_step "Generating Redis utilities..."
+    generate_redis_connection
+    generate_redis_cache
+    generate_redis_sessions
+    generate_redis_rate_limiting
+    generate_redis_middleware
+
+    print_step "Generating main application..."
     generate_main_app
 
-    print_status "Generating database migrations..."
+    print_step "Generating database migrations..."
     generate_alembic_config
 
-    print_status "Generating tests..."
+    print_step "Generating comprehensive tests..."
     generate_test_config
     generate_auth_tests
+    generate_password_tests
 
     if [[ "$USE_DOCKER" == true ]]; then
-        print_status "Generating Docker configuration..."
+        print_step "Generating Docker configuration..."
         generate_dockerfile
         generate_docker_compose
         generate_dockerignore
     fi
 
-    if [[ "$REDIS_ENABLED" == true ]]; then
-        print_status "Generating Redis integration..."
-        generate_redis_integration
-    else
-        print_status "Skipping Redis integration (disabled)"
-    fi
-
-    print_status "Generating documentation..."
+    print_step "Generating documentation..."
     generate_readme
 
-    # Initialize git repository if git is available
-    if command_exists git && ! git rev-parse --git-dir > /dev/null 2>&1; then
-        print_status "Initializing git repository..."
-        git init
-        git add .
-        git commit -m "Initial commit: FastAPI boilerplate generated"
-    fi
+    cd ..
 }
 
-# Show completion message
+# Show completion message with Step 1 features
 show_completion() {
-    print_success "FastAPI JWT boilerplate created successfully!"
+    print_success "FastAPI JWT boilerplate with Password Security created successfully!"
 
     echo ""
-    print_header "🎉 Project Created: $PROJECT_NAME"
-    echo -e "${CYAN}Location: $PROJECT_FULL_PATH${NC}"
+    print_header "STEP 1: Password Security Standards - IMPLEMENTED ✓"
+    echo -e "${GREEN}✓ OWASP-compliant password validation${NC}"
+    echo -e "${GREEN}✓ Strong password requirements (12+ chars, complexity)${NC}"
+    echo -e "${GREEN}✓ Password history tracking (prevents reuse of last 5)${NC}"
+    echo -e "${GREEN}✓ Account lockout protection (5 failed attempts)${NC}"
+    echo -e "${GREEN}✓ Common password blacklist (50+ passwords)${NC}"
+    echo -e "${GREEN}✓ Password strength scoring (0-100)${NC}"
+    echo -e "${GREEN}✓ Real-time password strength feedback${NC}"
+    echo -e "${GREEN}✓ Secure password reset with tokens${NC}"
     echo ""
 
     print_status "Next steps:"
@@ -342,7 +333,7 @@ show_completion() {
         echo "- Redis: localhost:6379"
         echo ""
         print_status "Docker services included:"
-        echo "- FastAPI application"
+        echo "- FastAPI application with password security"
         echo "- PostgreSQL database"
         echo "- Redis cache"
     else
@@ -350,7 +341,7 @@ show_completion() {
         echo "3. source venv/bin/activate  # On Windows: venv\\Scripts\\activate"
         echo "4. pip install -r requirements.txt"
         echo "5. Edit .env file with your database settings"
-        echo "6. alembic revision --autogenerate -m \"Initial migration\""
+        echo "6. alembic revision --autogenerate -m \"Initial migration with password security\""
         echo "7. alembic upgrade head"
         echo "8. python main.py"
         echo ""
@@ -365,26 +356,72 @@ show_completion() {
     fi
 
     echo ""
-    print_status "API Endpoints:"
-    echo "- POST /api/v1/auth/register - Register new user"
-    echo "- POST /api/v1/auth/login    - Login user"
-    echo "- GET  /api/v1/users/me      - Get current user (authenticated)"
-    echo "- PUT  /api/v1/users/me      - Update current user (authenticated)"
-
+    print_status "API Endpoints with Password Security:"
+    echo "- POST /api/v1/auth/register           - Register with strong password validation"
+    echo "- POST /api/v1/auth/login              - Login with lockout protection"
+    echo "- POST /api/v1/auth/change-password    - Change password with history check"
+    echo "- POST /api/v1/auth/check-password-strength - Real-time password validation"
+    echo "- POST /api/v1/auth/request-password-reset  - Request password reset token"
+    echo "- POST /api/v1/auth/confirm-password-reset  - Reset password with token"
+    echo "- GET  /api/v1/users/me                - Get current user info"
     echo ""
+
+    print_status "Testing your implementation:"
+    echo "- Run tests: pytest"
+    echo "- Test password validation: pytest tests/test_password_validation.py"
+    echo "- Test auth endpoints: pytest tests/test_auth.py"
+    echo ""
+
     print_warning "IMPORTANT SECURITY NOTES:"
-    echo "- Change JWT_SECRET_KEY in production!"
-    echo "- Configure CORS_ORIGINS for your domain"
-    echo "- Use HTTPS in production"
-    echo "- Review and strengthen password policies"
-
+    echo "🔒 Change JWT_SECRET_KEY in production!"
+    echo "🔒 Review and adjust password policies in .env"
+    echo "🔒 Configure proper CORS origins for production"
+    echo "🔒 Set up email service for password reset (Step 5)"
     echo ""
-    print_success "🚀 Project '$PROJECT_NAME' ready for development!"
-    print_status "Generated in: $PROJECT_FULL_PATH"
+
+    print_status "Password Security Configuration (in .env):"
+    echo "- PASSWORD_MIN_LENGTH=12              # Minimum password length"
+    echo "- PASSWORD_MAX_LENGTH=128             # Maximum password length"
+    echo "- PASSWORD_HISTORY_COUNT=5            # Number of old passwords to remember"
+    echo "- PASSWORD_MAX_AGE_DAYS=90            # Password expiry (future feature)"
+    echo "- ACCOUNT_LOCKOUT_ATTEMPTS=5          # Failed attempts before lockout"
+    echo "- ACCOUNT_LOCKOUT_DURATION_MINUTES=15 # Lockout duration"
+    echo ""
+
+    print_success "Ready for STEP 2: Account Security & Rate Limiting"
+    echo "Next implementation will add:"
+    echo "- Progressive lockout (increasing duration)"
+    echo "- Rate limiting per IP address"
+    echo "- CAPTCHA integration after failed attempts"
+    echo "- Suspicious activity detection"
+    echo ""
+
+    print_success "Project '$PROJECT_NAME' created successfully in '$PROJECT_DIR_NAME'"
 }
+
+# Check prerequisites
+check_prerequisites() {
+    # Check if required commands exist
+    local missing_commands=()
+    
+    if ! command_exists git; then
+        missing_commands+=("git")
+    fi
+    
+    if [[ ${#missing_commands[@]} -gt 0 ]]; then
+        print_error "Missing required commands: ${missing_commands[*]}"
+        print_status "Please install the missing commands and try again"
+        exit 1
+    fi
+
+}
+
 
 # Main execution
 main() {
+    # Check prerequisites
+    check_prerequisites
+    
     # Parse command line arguments
     parse_arguments "$@"
     
@@ -399,12 +436,24 @@ main() {
     # Validate configuration
     validate_config
     
-    # Create project
+    # Create project with Step 1 implementation
     create_project_structure
     
-    # Show completion message
+    # Generate seed data for development
+    cd "$PROJECT_FULL_PATH"
+    cd ..
+    
+    # Show completion message with Step 1 features
     show_completion
+    
+    print_status "Development utilities created:"
+    echo "- scripts/seed_data.py - Creates admin user and default roles"
+    echo "  Usage: cd $PROJECT_DIR_NAME && python scripts/seed_data.py"
+    echo ""
 }
+
+# Handle script interruption
+trap 'print_error "Script interrupted. Cleaning up..."; exit 1' INT TERM
 
 # Run main function with all arguments
 main "$@"

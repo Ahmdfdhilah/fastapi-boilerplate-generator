@@ -165,21 +165,6 @@ append_requirement() {
     fi
 }
 
-# Function to validate Python version
-check_python_version() {
-    if command_exists python3; then
-        local version=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
-        local major=$(echo "$version" | cut -d'.' -f1)
-        local minor=$(echo "$version" | cut -d'.' -f2)
-        
-        if [[ $major -eq 3 && $minor -ge 8 ]]; then
-            return 0
-        fi
-    fi
-    
-    print_warning "Python 3.8+ is recommended for this project"
-    return 1
-}
 
 # Function to create empty file with directory
 create_file() {
