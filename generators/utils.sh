@@ -93,7 +93,7 @@ from fastapi import UploadFile, HTTPException, status
 
 def validate_email(email: str) -> bool:
     """Validate email format."""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(pattern, email))
 
 
@@ -138,5 +138,35 @@ def validate_upload_file(file: UploadFile, allowed_types: List[str] = None, max_
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File type not allowed. Allowed types: {', '.join(allowed_types)}"
         )
+
+
+def sanitize_filename(filename: str, max_length: int = 50) -> str:
+    """Sanitize filename for safe storage."""
+    # Remove unsafe characters
+    filename = re.sub(r'[^\w\-_\.]', '_', filename)
+    
+    # Limit length
+    if len(filename) > max_length:
+        name, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
+        max_name_length = max_length - len(ext) - 1 if ext else max_length
+        filename = f"{name[:max_name_length]}.{ext}" if ext else name[:max_length]
+    
+    return filename
+EOF
+
+    # Create utils __init__.py
+    cat > src/utils/__init__.py << 'EOF'
+"""Utils package."""
+
+from .logging import setup_logging
+from .validators import validate_email, validate_password, validate_upload_file, sanitize_filename
+
+__all__ = [
+    "setup_logging",
+    "validate_email",
+    "validate_password",
+    "validate_upload_file",
+    "sanitize_filename"
+]
 EOF
 }

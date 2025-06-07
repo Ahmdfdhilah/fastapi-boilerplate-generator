@@ -127,4 +127,14 @@ def setup_logging_middleware(app):
     """Setup request logging middleware."""
     app.add_middleware(RequestLoggingMiddleware)
 EOF
+
+    # Create middleware __init__.py
+    cat > src/middleware/__init__.py << 'EOF'
+"""Middleware package."""
+
+from .error_handler import setup_exception_handlers
+from .logging import setup_logging_middleware
+
+__all__ = ["setup_exception_handlers", "setup_logging_middleware"]
+EOF
 }

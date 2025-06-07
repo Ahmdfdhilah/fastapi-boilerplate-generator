@@ -208,6 +208,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     ${downgrades if downgrades else "pass"}
 EOF
+
+    # Create empty __init__.py in versions
+    touch alembic/versions/__init__.py
 }
 
 # Generate README.md
@@ -219,7 +222,7 @@ generate_readme() {
         setup_instructions="### With Docker
 
 \`\`\`bash
-cd $PROJECT_DIR
+cd $PROJECT_FULL_PATH
 # Edit .env file if needed
 docker-compose up --build
 \`\`\`
@@ -227,7 +230,7 @@ docker-compose up --build
 ### Alternative: Manual Setup
 
 \`\`\`bash
-cd $PROJECT_DIR
+cd $PROJECT_FULL_PATH
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\\\\Scripts\\\\activate
 pip install -r requirements.txt
@@ -259,7 +262,7 @@ Services included:
         setup_instructions="### Manual Setup
 
 \`\`\`bash
-cd $PROJECT_DIR
+cd $PROJECT_FULL_PATH
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\\\\Scripts\\\\activate
 pip install -r requirements.txt
@@ -315,7 +318,7 @@ This is a FastAPI boilerplate with JWT authentication, built with modern Python 
 ## Project Structure
 
 \`\`\`
-$PROJECT_DIR/
+$PROJECT_DIR_NAME/
 ├── src/
 │   ├── api/
 │   │   ├── endpoints/
@@ -356,6 +359,8 @@ $PROJECT_DIR/
 \`\`\`
 
 ## Quick Start
+
+### 1. Setup Project
 
 $setup_instructions
 
@@ -398,10 +403,12 @@ $usage_note
 
 - \`POST /api/v1/auth/register\` - Register new user
 - \`POST /api/v1/auth/login\` - Login user
+- \`POST /api/v1/auth/logout\` - Logout user
 
 ### Users
 
 - \`GET /api/v1/users/me\` - Get current user info (requires auth)
+- \`PUT /api/v1/users/me\` - Update current user info (requires auth)
 
 ## Usage Examples
 
@@ -439,7 +446,7 @@ curl -X GET "http://localhost:8000/api/v1/users/me" \\
 ## Testing
 
 \`\`\`bash
-# Install test dependencies
+# Install test dependencies (already in requirements.txt)
 pip install pytest pytest-asyncio httpx
 
 # Run tests
@@ -447,6 +454,9 @@ pytest
 
 # Run with coverage
 pytest --cov=src tests/
+
+# Run specific test file
+pytest tests/test_auth.py -v
 \`\`\`
 
 ## Database Migrations
@@ -460,6 +470,12 @@ alembic upgrade head
 
 # Rollback migration
 alembic downgrade -1
+
+# Show migration history
+alembic history
+
+# Show current revision
+alembic current
 \`\`\`
 
 ## Environment Variables
@@ -504,6 +520,36 @@ This project follows Python best practices:
 - Async/await for database operations
 - Proper error handling and logging
 - Clean architecture with separation of concerns
+
+## API Documentation
+
+Once the server is running, you can access the interactive API documentation:
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Database Connection Error**
+   - Check PostgreSQL is running
+   - Verify database credentials in \`.env\`
+   - Ensure database exists
+
+2. **JWT Token Issues**
+   - Check \`JWT_SECRET_KEY\` is set
+   - Verify token hasn't expired
+   - Ensure proper Bearer token format
+
+3. **Migration Issues**
+   - Check database connectivity
+   - Verify alembic configuration
+   - Ensure models are imported in \`alembic/env.py\`
+
+### Logs
+
+Application logs are stored in the \`logs/\` directory with automatic rotation.
 
 ## Contributing
 

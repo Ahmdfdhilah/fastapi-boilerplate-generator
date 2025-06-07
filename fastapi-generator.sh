@@ -104,11 +104,11 @@ interactive_setup() {
 
     PROJECT_NAME=$(prompt_with_default "Enter project name" "${PROJECT_NAME:-my-fastapi-service}")
     PROJECT_DESCRIPTION=$(prompt_with_default "Enter project description" "${PROJECT_DESCRIPTION:-FastAPI service with JWT authentication}")
-    AUTHOR_NAME=$(prompt_with_default "Enter author name" "${AUTHOR_NAME:-$(git config user.name 2>/dev/null || echo 'Your Name')}")
-    AUTHOR_EMAIL=$(prompt_with_default "Enter author email" "${AUTHOR_EMAIL:-$(git config user.email 2>/dev/null || echo 'your.email@example.com')}")
+    AUTHOR_NAME=$(prompt_with_default "Enter author name" "${AUTHOR_NAME:-$(get_git_user_name)}")
+    AUTHOR_EMAIL=$(prompt_with_default "Enter author email" "${AUTHOR_EMAIL:-$(get_git_user_email)}")
 
     # Prompt user for the parent directory
-    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (e.g., /home/user/projects, or leave blank to use parent directory): ${NC}")" PARENT_DIR_INPUT
+    read -p "$(echo -e "${GREEN}Enter the parent directory where the project will be created (leave blank for parent directory): ${NC}")" PARENT_DIR_INPUT
     
     # Resolve the absolute path of the parent directory
     if [[ -z "$PARENT_DIR_INPUT" ]]; then
@@ -139,7 +139,6 @@ interactive_setup() {
             fi
         fi
     fi
-    echo -e "${YELLOW}Project will be created in: $PROJECT_PARENT_DIR/${PROJECT_NAME}${NC}"
 
     # Ask for deployment preference if not set
     if [[ -z "$USE_DOCKER" ]]; then
@@ -178,12 +177,17 @@ validate_config() {
         print_error "Project name can only contain letters, numbers, hyphens, and underscores"
         exit 1
     fi
+
+    # Validate email if provided
+    if [[ -n "$AUTHOR_EMAIL" ]] && ! validate_email "$AUTHOR_EMAIL"; then
+        print_warning "Invalid email format: $AUTHOR_EMAIL"
+    fi
 }
 
 # Create project structure
 create_project_structure() {
-   # Sanitize project name for directory
-    PROJECT_DIR_NAME=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+    # Sanitize project name for directory
+    PROJECT_DIR_NAME=$(sanitize_project_name "$PROJECT_NAME")
     
     # Combine parent directory and project name to get the full path
     PROJECT_FULL_PATH="$PROJECT_PARENT_DIR/$PROJECT_DIR_NAME"
@@ -193,10 +197,15 @@ create_project_structure() {
     # Check if directory already exists
     if [[ -d "$PROJECT_FULL_PATH" ]]; then
         print_error "Directory $PROJECT_FULL_PATH already exists!"
-        exit 1
+        if confirm "Do you want to continue and overwrite existing files?"; then
+            print_warning "Continuing with existing directory..."
+        else
+            print_status "Operation cancelled."
+            exit 1
+        fi
     fi
 
-    # Create project structure
+    # Create and enter project directory
     mkdir -p "$PROJECT_FULL_PATH"
     cd "$PROJECT_FULL_PATH"
 
@@ -266,7 +275,13 @@ create_project_structure() {
     print_status "Generating documentation..."
     generate_readme
 
-    cd ..
+    # Initialize git repository if git is available
+    if command_exists git && ! git rev-parse --git-dir > /dev/null 2>&1; then
+        print_status "Initializing git repository..."
+        git init
+        git add .
+        git commit -m "Initial commit: FastAPI boilerplate generated"
+    fi
 }
 
 # Show completion message
@@ -274,8 +289,12 @@ show_completion() {
     print_success "FastAPI JWT boilerplate created successfully!"
 
     echo ""
+    print_header "🎉 Project Created: $PROJECT_NAME"
+    echo -e "${CYAN}Location: $PROJECT_FULL_PATH${NC}"
+    echo ""
+
     print_status "Next steps:"
-    echo "1. cd $PROJECT_DIR"
+    echo "1. cd $PROJECT_DIR_NAME"
 
     if [[ "$USE_DOCKER" == true ]]; then
         echo "2. Edit .env file with your database settings (if needed)"
@@ -312,8 +331,22 @@ show_completion() {
     fi
 
     echo ""
-    print_warning "IMPORTANT: Remember to change JWT_SECRET_KEY in production!"
-    print_success "Project '$PROJECT_NAME' created in directory '$PROJECT_DIR'"
+    print_status "API Endpoints:"
+    echo "- POST /api/v1/auth/register - Register new user"
+    echo "- POST /api/v1/auth/login    - Login user"
+    echo "- GET  /api/v1/users/me      - Get current user (authenticated)"
+    echo "- PUT  /api/v1/users/me      - Update current user (authenticated)"
+
+    echo ""
+    print_warning "IMPORTANT SECURITY NOTES:"
+    echo "- Change JWT_SECRET_KEY in production!"
+    echo "- Configure CORS_ORIGINS for your domain"
+    echo "- Use HTTPS in production"
+    echo "- Review and strengthen password policies"
+
+    echo ""
+    print_success "🚀 Project '$PROJECT_NAME' ready for development!"
+    print_status "Generated in: $PROJECT_FULL_PATH"
 }
 
 # Main execution

@@ -4,7 +4,7 @@
 
 # Generate .env file
 generate_env_file() {
-    local db_name=$(echo "$PROJECT_DIR" | sed 's/-/_/g')_db
+    local db_name=$(echo "$PROJECT_NAME" | sed 's/[^a-zA-Z0-9]/_/g' | tr '[:upper:]' '[:lower:]')_db
     local jwt_secret=$(generate_jwt_secret)
     
     cat > .env << EOF
@@ -52,67 +52,49 @@ MAX_FILENAME_LENGTH=$DEFAULT_MAX_FILENAME_LENGTH
 LOG_DIRECTORY=$DEFAULT_LOG_DIRECTORY
 LOG_MAX_BYTES=$DEFAULT_LOG_MAX_BYTES
 LOG_BACKUP_COUNT=$DEFAULT_LOG_BACKUP_COUNT
-SERVICE_NAME="$PROJECT_DIR"
+SERVICE_NAME="$PROJECT_NAME"
 EOF
 }
 
 # Generate requirements.txt
 generate_requirements() {
     cat > requirements.txt << EOF
-# FastAPI and dependencies
-alembic==1.13.1
-annotated-types==0.7.0
-anyio==3.7.1
-async-timeout==5.0.1
-asyncpg==0.29.0
-bcrypt==4.3.0
-bleach==6.1.0
-certifi==2025.4.26
-cffi==1.17.1
-click==8.2.1
-colorama==0.4.6
-cryptography==45.0.3
-dnspython==2.7.0
-ecdsa==0.19.1
-email_validator==2.2.0
+# FastAPI and core dependencies
 fastapi==0.104.1
-greenlet==3.2.3
-h11==0.16.0
-httpcore==1.0.9
-httptools==0.6.4
-httpx==0.25.2
-idna==3.10
-iniconfig==2.1.0
-Mako==1.3.10
-MarkupSafe==3.0.2
-packaging==25.0
-passlib==1.7.4
-pluggy==1.6.0
-pyasn1==0.6.1
-pycparser==2.22
+uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
-pydantic_core==2.14.1
+
+# Database
+sqlmodel==0.0.14
+asyncpg==0.29.0
+alembic==1.13.1
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# HTTP client for testing
+httpx==0.25.2
+
+# Redis (optional)
+redis==5.0.1
+
+# Other utilities
+python-multipart==0.0.6
+python-dotenv==1.1.0
+email-validator==2.2.0
+
+# Testing
 pytest==7.4.3
 pytest-asyncio==0.21.1
-python-dotenv==1.1.0
-python-jose==3.3.0
-python-multipart==0.0.6
-python-slugify==8.0.1
-PyYAML==6.0.2
-redis==5.0.1
-rsa==4.9.1
-six==1.17.0
-sniffio==1.3.1
-SQLAlchemy==2.0.41
-sqlmodel==0.0.14
-starlette==0.27.0
-text-unidecode==1.3
-typing_extensions==4.14.0
-uvicorn==0.24.0
-watchfiles==1.0.5
-webencodings==0.5.1
-websockets==15.0.1
+pytest-cov==4.1.0
+
+# Development
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
 EOF
 
     # Add additional requirements if specified
@@ -154,17 +136,20 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # Environment variables
 .env
 .env.local
 .env.production
+.env.staging
 
 # IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # Logs
 logs/
@@ -173,9 +158,15 @@ logs/
 # Database
 *.db
 *.sqlite
+*.sqlite3
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Uploads
@@ -186,10 +177,57 @@ static/uploads/
 .coverage
 .pytest_cache/
 htmlcov/
+.tox/
+.nox/
 
 # Alembic
 alembic/versions/*.py
 !alembic/versions/__init__.py
+
+# Documentation
+.sphinx/
+docs/_build/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Package files
+*.egg-info/
+dist/
+build/
 EOF
 }
 
@@ -305,6 +343,16 @@ class Settings(BaseSettings):
 
 # Create global settings instance
 settings = Settings()
+EOF
+
+    # Create core __init__.py
+    cat > src/core/__init__.py << 'EOF'
+"""Core package."""
+
+from .config import settings
+from .database import get_db, init_db
+
+__all__ = ["settings", "get_db", "init_db"]
 EOF
 }
 
