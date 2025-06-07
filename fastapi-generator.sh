@@ -21,6 +21,7 @@ source "$SCRIPT_DIR/generators/utils.sh"
 source "$SCRIPT_DIR/generators/tests.sh"
 source "$SCRIPT_DIR/generators/docker.sh"
 source "$SCRIPT_DIR/generators/docs.sh"
+source "$SCRIPT_DIR/generators/redis.sh"
 
 # Function to show usage
 show_usage() {
@@ -164,6 +165,32 @@ interactive_setup() {
                 ;;
         esac
     fi
+
+    # Redis Configuration Choice
+    echo ""
+    print_status "Redis Configuration:"
+    echo "Redis provides token blacklist functionality and caching capabilities."
+    echo "Without Redis, tokens cannot be revoked until they expire naturally."
+    echo ""
+    echo "1. Enable Redis (Recommended for production)"
+    echo "2. Skip Redis (Basic JWT only)"
+    echo ""
+    REDIS_CHOICE=$(prompt_with_default "Enter your choice (1 or 2)" "1")
+
+    case $REDIS_CHOICE in
+        1)
+            REDIS_ENABLED=true
+            print_success "Redis enabled - Token revocation and caching available"
+            ;;
+        2)
+            REDIS_ENABLED=false
+            print_warning "Redis disabled - Tokens cannot be revoked before expiry"
+            ;;
+        *)
+            REDIS_ENABLED=true
+            print_warning "Invalid choice, defaulting to Redis enabled"
+            ;;
+    esac
 }
 
 # Validate project configuration
@@ -270,6 +297,13 @@ create_project_structure() {
         generate_dockerfile
         generate_docker_compose
         generate_dockerignore
+    fi
+
+    if [[ "$REDIS_ENABLED" == true ]]; then
+        print_status "Generating Redis integration..."
+        generate_redis_integration
+    else
+        print_status "Skipping Redis integration (disabled)"
     fi
 
     print_status "Generating documentation..."

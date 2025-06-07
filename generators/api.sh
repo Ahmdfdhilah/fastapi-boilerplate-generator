@@ -443,15 +443,9 @@ api_router = APIRouter()
 # Include endpoint routers
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
-
-# Health check endpoint
-@api_router.get("/health")
-async def health_check():
-    """API health check endpoint."""
-    return {
-        "status": "healthy",
-        "message": "API is working correctly"
-    }
+if settings.REDIS_ENABLED:
+    from src.api.endpoints import logout
+    api_router.include_router(logout.router, prefix="/auth", tags=["authentication"])
 EOF
 
     # Update src/api/__init__.py
