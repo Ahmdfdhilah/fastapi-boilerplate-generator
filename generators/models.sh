@@ -42,7 +42,7 @@ generate_user_models() {
 """User model with password security features."""
 
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 
 from .base import BaseModel
@@ -66,9 +66,10 @@ class User(BaseModel, SQLModel, table=True):
     password_history: List[str] = Field(default=[], sa_column=Column(JSON))
     force_password_change: bool = Field(default=False)
     
-    # Account security fields (for future steps)
+    # Account security fields (Step 2)
     failed_login_attempts: int = Field(default=0)
     locked_until: Optional[datetime] = Field(default=None)
+    lockout_duration_minutes: int = Field(default=0)
     last_login: Optional[datetime] = Field(default=None)
     
     # Relationships
@@ -79,6 +80,38 @@ class User(BaseModel, SQLModel, table=True):
         if not self.locked_until:
             return False
         return datetime.utcnow() < self.locked_until
+    
+    def lock_account(self) -> None:
+        """Lock account with progressive duration based on failed attempts."""
+        # Progressive lockout: 5min, 15min, 1hour, 24hour
+        lockout_durations = [5, 15, 60, 1440]  # minutes
+        
+        if self.failed_login_attempts >= len(lockout_durations):
+            # Maximum lockout (24 hours)
+            duration = lockout_durations[-1]
+        else:
+            duration = lockout_durations[self.failed_login_attempts - 1]
+        
+        self.lockout_duration_minutes = duration
+        self.locked_until = datetime.utcnow() + timedelta(minutes=duration)
+    
+    def unlock_account(self) -> None:
+        """Unlock account and reset failed attempts."""
+        self.failed_login_attempts = 0
+        self.locked_until = None
+        self.lockout_duration_minutes = 0
+    
+    def increment_failed_attempts(self) -> None:
+        """Increment failed login attempts and lock if necessary."""
+        self.failed_login_attempts += 1
+        
+        # Lock after 5 failed attempts
+        if self.failed_login_attempts >= 5:
+            self.lock_account()
+    
+    def reset_failed_attempts(self) -> None:
+        """Reset failed attempts after successful login."""
+        self.failed_login_attempts = 0
     
     def add_password_to_history(self, hashed_password: str) -> None:
         """Add password to history, keeping only last 5."""

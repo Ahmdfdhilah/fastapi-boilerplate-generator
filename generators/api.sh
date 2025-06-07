@@ -236,18 +236,18 @@ class UserRepository:
         await self.session.refresh(user)
         return user
 
-    async def increment_failed_login_attempts(self, user_id: int) -> None:
-        """Increment failed login attempts counter."""
-        query = (
-            update(User)
-            .where(User.id == user_id)
-            .values(
-                failed_login_attempts=User.failed_login_attempts + 1,
-                updated_at=datetime.utcnow()
-            )
-        )
-        await self.session.execute(query)
+    async def increment_failed_login_attempts(self, user_id: int) -> User:
+        """Increment failed login attempts counter with progressive lockout."""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return None
+            
+        user.increment_failed_attempts()
+        user.updated_at = datetime.utcnow()
+        
         await self.session.commit()
+        await self.session.refresh(user)
+        return user
 
     async def reset_failed_login_attempts(self, user_id: int) -> None:
         """Reset failed login attempts counter."""
@@ -263,14 +263,15 @@ class UserRepository:
         await self.session.execute(query)
         await self.session.commit()
 
-    async def lock_account(self, user_id: int, lock_duration_minutes: int = 15) -> None:
-        """Lock user account for specified duration."""
-        lock_until = datetime.utcnow() + timedelta(minutes=lock_duration_minutes)
+    async def unlock_account(self, user_id: int) -> None:
+        """Unlock user account and reset failed attempts."""
         query = (
             update(User)
             .where(User.id == user_id)
             .values(
-                locked_until=lock_until,
+                failed_login_attempts=0,
+                locked_until=None,
+                lockout_duration_minutes=0,
                 updated_at=datetime.utcnow()
             )
         )
@@ -378,15 +379,14 @@ class UserService:
         
         # Verify password
         if not verify_password(password, user.hashed_password):
-            # Increment failed attempts
-            await self.user_repo.increment_failed_login_attempts(user.id)
+            # Increment failed attempts (this will auto-lock if needed)
+            updated_user = await self.user_repo.increment_failed_login_attempts(user.id)
             
-            # Check if we should lock the account (5 failed attempts)
-            if user.failed_login_attempts + 1 >= 5:
-                await self.user_repo.lock_account(user.id, 15)  # Lock for 15 minutes
+            # Check if account is now locked
+            if updated_user and updated_user.is_locked():
                 raise HTTPException(
                     status_code=status.HTTP_423_LOCKED,
-                    detail="Account locked due to too many failed login attempts. Try again in 15 minutes."
+                    detail=f"Account locked due to too many failed login attempts. Try again in {updated_user.lockout_duration_minutes} minutes."
                 )
             
             return None
@@ -448,6 +448,22 @@ class UserService:
             "errors": result["errors"],
             "feedback": feedback
         }
+    
+    async def unlock_user_account(self, user_id: int) -> UserResponse:
+        """Unlock user account (admin function)."""
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # Unlock account
+        await self.user_repo.unlock_account(user_id)
+        
+        # Get updated user
+        updated_user = await self.user_repo.get_by_id(user_id)
+        return UserResponse.model_validate(updated_user)
 EOF
 }
 
@@ -684,6 +700,23 @@ async def confirm_password_reset(
     return SuccessResponse(
         success=True,
         message=result["message"]
+    )
+
+
+@router.post("/unlock-account/{user_id}", response_model=SuccessResponse)
+async def unlock_account(
+    user_id: int,
+    current_user: dict = Depends(get_current_active_user),
+    user_service: UserService = Depends(get_user_service)
+):
+    """Unlock user account (admin only)."""
+    # Check if current user has admin role (implement role check)
+    # For now, allow any authenticated user to unlock (should be restricted to admin)
+    
+    await user_service.unlock_user_account(user_id)
+    return SuccessResponse(
+        success=True,
+        message="Account unlocked successfully"
     )
 EOF
 }

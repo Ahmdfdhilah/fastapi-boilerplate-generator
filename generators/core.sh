@@ -61,6 +61,12 @@ PASSWORD_HISTORY_COUNT=5
 PASSWORD_MAX_AGE_DAYS=90
 ACCOUNT_LOCKOUT_ATTEMPTS=5
 ACCOUNT_LOCKOUT_DURATION_MINUTES=15
+
+# Rate Limiting Settings (Step 2)
+RATE_LIMIT_CALLS=100
+RATE_LIMIT_PERIOD=60
+AUTH_RATE_LIMIT_CALLS=5
+AUTH_RATE_LIMIT_PERIOD=300
 EOF
 }
 
@@ -266,6 +272,12 @@ class Settings(BaseSettings):
     PASSWORD_MAX_AGE_DAYS: int = 90
     ACCOUNT_LOCKOUT_ATTEMPTS: int = 5
     ACCOUNT_LOCKOUT_DURATION_MINUTES: int = 15
+    
+    # Rate Limiting Settings (Step 2)
+    RATE_LIMIT_CALLS: int = 100
+    RATE_LIMIT_PERIOD: int = 60
+    AUTH_RATE_LIMIT_CALLS: int = 5
+    AUTH_RATE_LIMIT_PERIOD: int = 300
 
     @field_validator("DATABASE_URI", mode="before")
     def assemble_db_connection(cls, v: Optional[str], info: Dict[str, Any]) -> Any:
@@ -394,6 +406,7 @@ from src.core.database import init_db
 from src.api import api_router
 from src.middleware.error_handler import setup_exception_handlers
 from src.middleware.logging import setup_logging_middleware
+from src.middleware.rate_limiting import setup_rate_limiting_middleware
 from src.utils.logging import setup_logging
 
 # Create FastAPI application
@@ -413,7 +426,8 @@ app.add_middleware(
     allow_headers=settings.CORS_HEADERS_LIST,
 )
 
-# Setup middleware
+# Setup middleware (Step 2: Rate limiting added)
+setup_rate_limiting_middleware(app)
 setup_logging_middleware(app)
 setup_exception_handlers(app)
 

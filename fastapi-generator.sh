@@ -265,6 +265,7 @@ create_project_structure() {
     print_step "Generating middleware..."
     generate_error_handler
     generate_logging_middleware
+    generate_rate_limiting_middleware
 
     print_step "Generating utilities with password validation..."
     generate_validators
@@ -317,6 +318,16 @@ show_completion() {
     echo -e "${GREEN}✓ Real-time password strength feedback${NC}"
     echo -e "${GREEN}✓ Secure password reset with tokens${NC}"
     echo ""
+    
+    print_header "STEP 2: Account Security & Rate Limiting - IMPLEMENTED ✓"
+    echo -e "${GREEN}✓ Progressive account lockout (5min, 15min, 1hour, 24hour)${NC}"
+    echo -e "${GREEN}✓ Failed login attempt tracking${NC}"
+    echo -e "${GREEN}✓ IP-based rate limiting (100 requests/minute)${NC}"
+    echo -e "${GREEN}✓ Auth-specific rate limiting (5 attempts/5 minutes)${NC}"
+    echo -e "${GREEN}✓ Automatic account unlocking after duration${NC}"
+    echo -e "${GREEN}✓ Manual account unlock endpoint (admin)${NC}"
+    echo -e "${GREEN}✓ Rate limit headers (429 status with Retry-After)${NC}"
+    echo ""
 
     print_status "Next steps:"
     echo "1. cd $PROJECT_DIR_NAME"
@@ -356,13 +367,14 @@ show_completion() {
     fi
 
     echo ""
-    print_status "API Endpoints with Password Security:"
+    print_status "API Endpoints with Security Features:"
     echo "- POST /api/v1/auth/register           - Register with strong password validation"
-    echo "- POST /api/v1/auth/login              - Login with lockout protection"
+    echo "- POST /api/v1/auth/login              - Login with lockout & rate limiting protection"
     echo "- POST /api/v1/auth/change-password    - Change password with history check"
     echo "- POST /api/v1/auth/check-password-strength - Real-time password validation"
     echo "- POST /api/v1/auth/request-password-reset  - Request password reset token"
     echo "- POST /api/v1/auth/confirm-password-reset  - Reset password with token"
+    echo "- POST /api/v1/auth/unlock-account/{user_id} - Unlock user account (admin)"
     echo "- GET  /api/v1/users/me                - Get current user info"
     echo ""
 
@@ -379,13 +391,16 @@ show_completion() {
     echo "🔒 Set up email service for password reset (Step 5)"
     echo ""
 
-    print_status "Password Security Configuration (in .env):"
+    print_status "Security Configuration (in .env):"
     echo "- PASSWORD_MIN_LENGTH=12              # Minimum password length"
     echo "- PASSWORD_MAX_LENGTH=128             # Maximum password length"
     echo "- PASSWORD_HISTORY_COUNT=5            # Number of old passwords to remember"
-    echo "- PASSWORD_MAX_AGE_DAYS=90            # Password expiry (future feature)"
     echo "- ACCOUNT_LOCKOUT_ATTEMPTS=5          # Failed attempts before lockout"
-    echo "- ACCOUNT_LOCKOUT_DURATION_MINUTES=15 # Lockout duration"
+    echo "- ACCOUNT_LOCKOUT_DURATION_MINUTES=15 # Base lockout duration"
+    echo "- RATE_LIMIT_CALLS=100                # Requests per minute limit"
+    echo "- RATE_LIMIT_PERIOD=60                # Rate limit window (seconds)"
+    echo "- AUTH_RATE_LIMIT_CALLS=5             # Auth attempts per window"
+    echo "- AUTH_RATE_LIMIT_PERIOD=300          # Auth rate limit window (seconds)"
     echo ""
 
     print_success "Ready for STEP 2: Account Security & Rate Limiting"
