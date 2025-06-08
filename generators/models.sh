@@ -72,8 +72,13 @@ class User(BaseModel, SQLModel, table=True):
     lockout_duration_minutes: int = Field(default=0)
     last_login: Optional[datetime] = Field(default=None)
     
+    # MFA fields (Step 3)
+    mfa_enabled: bool = Field(default=False)
+    mfa_secret: Optional[str] = Field(default=None)
+    
     # Relationships
     roles: List["UserRole"] = Relationship(back_populates="user")
+    backup_codes: List["MFABackupCode"] = Relationship(back_populates="user")
     
     def is_locked(self) -> bool:
         """Check if account is currently locked."""
@@ -165,5 +170,20 @@ class PasswordResetToken(BaseModel, SQLModel, table=True):
     def is_valid(self) -> bool:
         """Check if token is still valid."""
         return not self.used and datetime.utcnow() < self.expires_at
+
+
+class MFABackupCode(BaseModel, SQLModel, table=True):
+    """MFA backup codes model."""
+    
+    __tablename__ = "mfa_backup_codes"
+    
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id")
+    code: str = Field(index=True)
+    used: bool = Field(default=False)
+    used_at: Optional[datetime] = Field(default=None)
+    
+    # Relationships
+    user: User = Relationship(back_populates="backup_codes")
 EOF
 }

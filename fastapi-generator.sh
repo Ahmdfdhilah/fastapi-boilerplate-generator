@@ -22,6 +22,7 @@ source "$SCRIPT_DIR/generators/tests.sh"
 source "$SCRIPT_DIR/generators/docker.sh"
 source "$SCRIPT_DIR/generators/docs.sh"
 source "$SCRIPT_DIR/generators/redis.sh"
+source "$SCRIPT_DIR/generators/mfa.sh"
 
 # Function to show usage
 show_usage() {
@@ -241,6 +242,12 @@ create_project_structure() {
     print_step "Generating authentication system..."
     generate_auth_jwt
     generate_auth_permissions
+    
+    print_step "Generating MFA system..."
+    generate_mfa_config
+    generate_mfa_schemas
+    generate_mfa_endpoints
+    generate_user_repository_mfa
 
     print_step "Generating models with password security..."
     generate_base_models
@@ -328,6 +335,17 @@ show_completion() {
     echo -e "${GREEN}✓ Manual account unlock endpoint (admin)${NC}"
     echo -e "${GREEN}✓ Rate limit headers (429 status with Retry-After)${NC}"
     echo ""
+    
+    print_header "STEP 3: Multi-Factor Authentication (MFA) - IMPLEMENTED ✓"
+    echo -e "${GREEN}✓ TOTP (Time-based One-Time Password) support${NC}"
+    echo -e "${GREEN}✓ QR code generation for authenticator apps${NC}"
+    echo -e "${GREEN}✓ Backup recovery codes (10 codes)${NC}"
+    echo -e "${GREEN}✓ MFA-aware login flow${NC}"
+    echo -e "${GREEN}✓ MFA setup and verification endpoints${NC}"
+    echo -e "${GREEN}✓ MFA disable with verification${NC}"
+    echo -e "${GREEN}✓ Backup code regeneration${NC}"
+    echo -e "${GREEN}✓ MFA status tracking and statistics${NC}"
+    echo ""
 
     print_status "Next steps:"
     echo "1. cd $PROJECT_DIR_NAME"
@@ -369,12 +387,17 @@ show_completion() {
     echo ""
     print_status "API Endpoints with Security Features:"
     echo "- POST /api/v1/auth/register           - Register with strong password validation"
-    echo "- POST /api/v1/auth/login              - Login with lockout & rate limiting protection"
+    echo "- POST /api/v1/auth/login              - Login with MFA support & rate limiting protection"
     echo "- POST /api/v1/auth/change-password    - Change password with history check"
     echo "- POST /api/v1/auth/check-password-strength - Real-time password validation"
     echo "- POST /api/v1/auth/request-password-reset  - Request password reset token"
     echo "- POST /api/v1/auth/confirm-password-reset  - Reset password with token"
     echo "- POST /api/v1/auth/unlock-account/{user_id} - Unlock user account (admin)"
+    echo "- POST /api/v1/auth/mfa/enable         - Enable MFA (returns QR code and backup codes)"
+    echo "- POST /api/v1/auth/mfa/verify-setup   - Verify MFA setup with TOTP code"
+    echo "- POST /api/v1/auth/mfa/disable        - Disable MFA with verification"
+    echo "- GET  /api/v1/auth/mfa/status         - Get MFA status for current user"
+    echo "- POST /api/v1/auth/mfa/backup-codes/regenerate - Regenerate backup codes"
     echo "- GET  /api/v1/users/me                - Get current user info"
     echo ""
 
@@ -382,6 +405,7 @@ show_completion() {
     echo "- Run tests: pytest"
     echo "- Test password validation: pytest tests/test_password_validation.py"
     echo "- Test auth endpoints: pytest tests/test_auth.py"
+    echo "- Test MFA functionality: pytest tests/test_mfa.py"
     echo ""
 
     print_warning "IMPORTANT SECURITY NOTES:"

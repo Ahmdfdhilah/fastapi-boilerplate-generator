@@ -7,7 +7,7 @@ generate_user_schemas() {
     cat > src/schemas/user.py << 'EOF'
 """User schemas with password security validation."""
 
-from typing import List, Optional
+from typing import List, Optional, Field
 from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 from datetime import datetime
 
@@ -58,6 +58,7 @@ class UserLogin(BaseModel):
     """Schema for user login."""
     email: EmailStr
     password: str
+    mfa_code: Optional[str] = Field(None, min_length=6, max_length=8, description="MFA TOTP code or backup code")
 
 
 class PasswordChange(BaseModel):
@@ -117,6 +118,8 @@ class Token(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    mfa_verified: bool = Field(default=False, description="Whether MFA was verified")
+    requires_mfa: bool = Field(default=False, description="Whether MFA is required for this user")
 
 
 class TokenData(BaseModel):
@@ -162,7 +165,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, and_, update
 from sqlalchemy.orm import selectinload
 
-from src.models.user import User, Role, UserRole, PasswordResetToken
+from src.models.user import User, Role, UserRole, PasswordResetToken, MFABackupCode
 from src.schemas.user import UserCreate, UserUpdate
 
 
@@ -324,6 +327,76 @@ class UserRepository:
         result = await self.session.execute(query)
         await self.session.commit()
         return result.rowcount > 0
+    
+    # MFA methods (Step 3)
+    async def update_mfa_secret(self, user_id: int, secret: Optional[str], enabled: bool) -> None:
+        """Update MFA secret and enabled status."""
+        query = (
+            update(User)
+            .where(User.id == user_id)
+            .values(
+                mfa_secret=secret,
+                mfa_enabled=enabled,
+                updated_at=datetime.utcnow()
+            )
+        )
+        await self.session.execute(query)
+        await self.session.commit()
+    
+    async def save_backup_codes(self, user_id: int, codes: List[str]) -> None:
+        """Save backup codes for user."""
+        backup_codes = [
+            MFABackupCode(user_id=user_id, code=code)
+            for code in codes
+        ]
+        self.session.add_all(backup_codes)
+        await self.session.commit()
+    
+    async def get_backup_codes(self, user_id: int) -> List[MFABackupCode]:
+        """Get all backup codes for user."""
+        query = select(MFABackupCode).where(MFABackupCode.user_id == user_id)
+        result = await self.session.execute(query)
+        return result.scalars().all()
+    
+    async def use_backup_code(self, backup_code_id: int) -> None:
+        """Mark backup code as used."""
+        query = (
+            update(MFABackupCode)
+            .where(MFABackupCode.id == backup_code_id)
+            .values(used=True, used_at=datetime.utcnow())
+        )
+        await self.session.execute(query)
+        await self.session.commit()
+    
+    async def clear_backup_codes(self, user_id: int) -> None:
+        """Clear all backup codes for user."""
+        query = select(MFABackupCode).where(MFABackupCode.user_id == user_id)
+        result = await self.session.execute(query)
+        codes = result.scalars().all()
+        
+        for code in codes:
+            await self.session.delete(code)
+        
+        await self.session.commit()
+    
+    async def get_mfa_stats(self) -> dict:
+        """Get MFA statistics."""
+        # Total users
+        total_query = select(User).where(User.deleted_at.is_(None))
+        total_result = await self.session.execute(total_query)
+        total_users = len(total_result.scalars().all())
+        
+        # MFA enabled users
+        mfa_query = select(User).where(
+            and_(User.deleted_at.is_(None), User.mfa_enabled == True)
+        )
+        mfa_result = await self.session.execute(mfa_query)
+        mfa_enabled_users = len(mfa_result.scalars().all())
+        
+        return {
+            "total_users": total_users,
+            "mfa_enabled_users": mfa_enabled_users
+        }
 EOF
 }
 
@@ -478,16 +551,19 @@ from fastapi import HTTPException, status
 from src.services.user import UserService
 from src.schemas.user import UserLogin, Token, PasswordReset, PasswordResetConfirm
 from src.auth.jwt import create_access_token, create_refresh_token
+from src.auth.mfa import MFAService
 from src.core.config import settings
 from src.utils.password import generate_password_reset_token
 
 
 class AuthService:
-    def __init__(self, user_service: UserService):
+    def __init__(self, user_service: UserService, session):
         self.user_service = user_service
+        self.session = session
+        self.mfa_service = MFAService(session)
 
     async def login(self, login_data: UserLogin) -> Token:
-        """Login user and return tokens with security checks."""
+        """Login user and return tokens with security checks and MFA support."""
         user = await self.user_service.authenticate_user(
             login_data.email, 
             login_data.password
@@ -513,17 +589,45 @@ class AuthService:
                 detail="Password change required. Please change your password before logging in."
             )
 
+        # Handle MFA verification if enabled
+        mfa_verified = True
+        requires_mfa = user.mfa_enabled
+        
+        if user.mfa_enabled:
+            if not login_data.mfa_code:
+                # User has MFA enabled but didn't provide code
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="MFA code required. Please provide your TOTP code or backup code."
+                )
+            
+            # Verify MFA code
+            mfa_verified = await self.mfa_service.verify_mfa_code(user.id, login_data.mfa_code)
+            
+            if not mfa_verified:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid MFA code"
+                )
+
+        # Create token data with MFA verification status
+        token_data = {"sub": str(user.id)}
+        if user.mfa_enabled:
+            token_data["mfa_verified"] = mfa_verified
+
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
-            data={"sub": str(user.id)}, 
+            data=token_data, 
             expires_delta=access_token_expires
         )
         
-        refresh_token = create_refresh_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(data=token_data)
 
         return Token(
             access_token=access_token,
-            refresh_token=refresh_token
+            refresh_token=refresh_token,
+            mfa_verified=mfa_verified,
+            requires_mfa=requires_mfa
         )
 
     async def request_password_reset(self, reset_data: PasswordReset) -> dict:
@@ -625,7 +729,7 @@ async def get_auth_service(session: AsyncSession = Depends(get_db)) -> AuthServi
     """Get auth service dependency."""
     user_repo = UserRepository(session)
     user_service = UserService(user_repo)
-    return AuthService(user_service)
+    return AuthService(user_service, session)
 
 
 async def get_user_service(session: AsyncSession = Depends(get_db)) -> UserService:
@@ -734,9 +838,11 @@ from src.repositories.user import UserRepository
 from src.services.user import UserService
 from src.schemas.user import UserResponse
 from src.auth.permissions import get_current_active_user
+from src.schemas.common import SuccessResponse
+from .auth import get_auth_service
+from ...services.auth import AuthService
 
 router = APIRouter()
-
 
 async def get_user_service(session: AsyncSession = Depends(get_db)) -> UserService:
     """Get user service dependency."""
@@ -752,6 +858,94 @@ async def get_current_user_info(
     """Get current user information."""
     user = await user_service.get_user(current_user["id"])
     return user
+
+
+# MFA endpoints (Step 3)
+@router.post("/mfa/enable", response_model=dict)
+async def enable_mfa(
+    current_user: dict = Depends(get_current_active_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Enable MFA for the current user."""
+    from src.auth.mfa import MFAService
+    mfa_service = MFAService(auth_service.session)
+    
+    result = await mfa_service.enable_mfa(current_user["id"])
+    return {
+        "success": True,
+        "message": "MFA setup initiated",
+        "data": result
+    }
+
+
+@router.post("/mfa/verify-setup", response_model=SuccessResponse)
+async def verify_mfa_setup(
+    code: str,
+    current_user: dict = Depends(get_current_active_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Verify MFA setup with TOTP code."""
+    from src.auth.mfa import MFAService
+    mfa_service = MFAService(auth_service.session)
+    
+    await mfa_service.verify_and_enable_mfa(current_user["id"], code)
+    
+    return SuccessResponse(
+        success=True,
+        message="MFA has been successfully enabled"
+    )
+
+
+@router.post("/mfa/disable", response_model=SuccessResponse)
+async def disable_mfa(
+    code: str,
+    current_user: dict = Depends(get_current_active_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Disable MFA for the current user."""
+    from src.auth.mfa import MFAService
+    mfa_service = MFAService(auth_service.session)
+    
+    await mfa_service.disable_mfa(current_user["id"], code)
+    
+    return SuccessResponse(
+        success=True,
+        message="MFA has been successfully disabled"
+    )
+
+
+@router.get("/mfa/status", response_model=dict)
+async def get_mfa_status(
+    current_user: dict = Depends(get_current_active_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Get MFA status for the current user."""
+    from src.auth.mfa import MFAService
+    mfa_service = MFAService(auth_service.session)
+    
+    status_data = await mfa_service.get_mfa_status(current_user["id"])
+    return {
+        "success": True,
+        "data": status_data
+    }
+
+
+@router.post("/mfa/backup-codes/regenerate", response_model=dict)
+async def regenerate_backup_codes(
+    current_user: dict = Depends(get_current_active_user),
+    auth_service: AuthService = Depends(get_auth_service)
+):
+    """Regenerate backup codes for the current user."""
+    from src.auth.mfa import MFAService
+    mfa_service = MFAService(auth_service.session)
+    
+    new_codes = await mfa_service.regenerate_backup_codes(current_user["id"])
+    
+    return {
+        "success": True,
+        "message": "Backup codes regenerated successfully",
+        "data": {"backup_codes": new_codes}
+    }
 EOF
 }
 
